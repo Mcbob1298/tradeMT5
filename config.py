@@ -4,8 +4,8 @@
 # =============================================================================
 # PARAMÈTRES DE CONNEXION MT5
 # =============================================================================
-MT5_LOGIN = 95421851
-MT5_PASSWORD = "Rx*xYpA4"
+MT5_LOGIN = 95431708
+MT5_PASSWORD = "5uBpUk-p"
 MT5_SERVER = "MetaQuotes-Demo"  # Changez selon votre broker
 
 # =============================================================================
@@ -25,16 +25,22 @@ MA_PERIOD = 5  # Période pour la moyenne mobile rapide
 TICK_COUNT = 20  # Nombre de ticks à analyser pour la volatilité
 VOLATILITY_THRESHOLD = 0.5  # Seuil minimum de volatilité pour agir
 
+# Gestion du risque dynamique (ATR)
+RISK_REWARD_RATIO = 1.5  # Ratio Risque/Récompense cible (1.5:1)
+ATR_MULTIPLIER = 1.5     # Multiple de l'ATR pour le Stop Loss
+MIN_SL_DISTANCE = 0.10   # Distance minimum du SL (10 pips)
+MAX_SL_DISTANCE = 2.00   # Distance maximum du SL (200 pips)
+
 # =============================================================================
 # PARAMÈTRES OPÉRATIONNELS
 # =============================================================================
 ANALYSIS_INTERVAL = 1  # Intervalle entre analyses (en secondes)
 MAGIC_NUMBER = 123456  # Numéro magique pour identifier les trades du bot
 
-# Limites de positions
-MAX_POSITIONS_TOTAL = 40  # Maximum de positions simultanées au total
-MAX_BUY_POSITIONS = 20     # Maximum de positions BUY simultanées
-MAX_SELL_POSITIONS = 20    # Maximum de positions SELL simultanées
+# Limites de positions (SCALPING SAIN : Qualité > Quantité)
+MAX_POSITIONS_TOTAL = 2   # Maximum 2 positions simultanées au total
+MAX_BUY_POSITIONS = 1     # Maximum 1 position BUY à la fois  
+MAX_SELL_POSITIONS = 1    # Maximum 1 position SELL à la fois
 
 # =============================================================================
 # SEUILS DE DÉCISION

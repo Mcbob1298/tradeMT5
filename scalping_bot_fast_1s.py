@@ -14,12 +14,17 @@ from datetime import datetime
 
 # Import des paramètres de configuration
 try:
-    from config import MAX_BUY_POSITIONS, MAX_SELL_POSITIONS, MAX_POSITIONS_TOTAL
+    from config import (MAX_BUY_POSITIONS, MAX_SELL_POSITIONS, MAX_POSITIONS_TOTAL, 
+                       RISK_REWARD_RATIO, ATR_MULTIPLIER, MIN_SL_DISTANCE, MAX_SL_DISTANCE)
 except ImportError:
-    # Valeurs par défaut si config.py n'est pas trouvé
-    MAX_BUY_POSITIONS = 20
-    MAX_SELL_POSITIONS = 20
-    MAX_POSITIONS_TOTAL = 40
+    # Valeurs par défaut si config.py n'est pas trouvé (SCALPING SAIN)
+    MAX_BUY_POSITIONS = 1
+    MAX_SELL_POSITIONS = 1
+    MAX_POSITIONS_TOTAL = 2
+    RISK_REWARD_RATIO = 1.5
+    ATR_MULTIPLIER = 1.5
+    MIN_SL_DISTANCE = 0.10
+    MAX_SL_DISTANCE = 2.00
 
 # Configuration
 SYMBOL = "XAUUSD"
@@ -88,7 +93,7 @@ def get_market_data():
         return None
 
 def get_signal(data):
-    """Génération de signal avec analyse R/R (seuils plus sensibles)"""
+    """Génération de signal avec gestion du risque dynamique basée sur l'ATR"""
     try:
         price = data['current_price']
         ema5 = data['ema5']
@@ -106,67 +111,64 @@ def get_signal(data):
         logging.info(f"📊 Prix: {price:.2f} | EMA5: {ema5:.2f} | EMA10: {ema10:.2f}")
         logging.info(f"📈 Support: {support:.2f} | Résistance: {resistance:.2f}")
         
-        # Signal BUY (seuils plus sensibles)
-        buy_trend = price > ema5  # Prix au-dessus de EMA5 (moins strict)
-        buy_momentum = momentum > 0.005  # Momentum réduit à 0.005%
+        # --- NOUVELLE LOGIQUE DE GESTION DU RISQUE DYNAMIQUE ---
+        # Calcul de la distance du SL basée sur la volatilité (ATR)
+        sl_distance_atr = atr * ATR_MULTIPLIER
+        
+        # Application des limites minimum et maximum
+        sl_distance = max(MIN_SL_DISTANCE, min(sl_distance_atr, MAX_SL_DISTANCE))
+        
+        # Calcul de la distance du TP basée sur le ratio R/R
+        tp_distance = sl_distance * RISK_REWARD_RATIO
+        
+        # Log des calculs de risque
+        logging.info(f"⚡ ATR={atr:.3f} | SL distance={sl_distance:.3f} | TP distance={tp_distance:.3f}")
+        
+        # Signal BUY (conditions inchangées)
+        buy_trend = price > ema5  # Prix au-dessus de EMA5
+        buy_momentum = momentum > 0.005  # Momentum positif
         ema_alignment = ema5 > ema10  # EMA5 > EMA10 pour confirmation
         
         if buy_trend and buy_momentum and ema_alignment:
-            logging.info("🔍 Conditions BUY remplies - Calcul TP/SL...")
+            logging.info("🔍 Conditions BUY remplies - Calcul TP/SL dynamique...")
             
-            # NOUVELLE LOGIQUE : TP à 5 barres, SL à 1000 barres
-            # TP à 5 barres = 5 pips = 0.05
-            tp_distance = 0.05  # 5 pips
+            sl_price = price - sl_distance
             tp_price = price + tp_distance
             
-            # SL à 1000 barres = 1000 pips = 10.00
-            sl_distance = 10.00  # 1000 pips
-            sl_price = price - sl_distance
+            rr_ratio_calculated = tp_distance / sl_distance
+            logging.info(f"🔍 Signal BUY détecté - R/R: {rr_ratio_calculated:.2f}:1")
+            logging.info(f"💰 TP: +{tp_distance:.3f} | SL: -{sl_distance:.3f} (ATR dynamique)")
             
-            # Vérification des distances
-            if tp_distance > 0 and sl_distance > 0:
-                rr_ratio = tp_distance / sl_distance  # Sera 0.005 (1:200)
-                logging.info(f"🔍 Signal BUY détecté - R/R: {rr_ratio:.3f}:1")
-                logging.info(f"⚡ TP: +{tp_distance:.2f} (5 barres) | SL: -{sl_distance:.2f} (1000 barres)")
-                
-                return {
-                    'signal': 'BUY',
-                    'entry': data['ask'],
-                    'sl': sl_price,
-                    'tp': tp_price,
-                    'rr_ratio': rr_ratio
-                }
+            return {
+                'signal': 'BUY',
+                'entry': data['ask'],
+                'sl': sl_price,
+                'tp': tp_price,
+                'rr_ratio': rr_ratio_calculated
+            }
         
-        # Signal SELL (seuils plus sensibles)
-        sell_trend = price < ema5  # Prix en-dessous de EMA5 (moins strict)
-        sell_momentum = momentum < -0.005  # Momentum réduit à -0.005%
+        # Signal SELL (conditions inchangées)
+        sell_trend = price < ema5  # Prix en-dessous de EMA5
+        sell_momentum = momentum < -0.005  # Momentum négatif
         ema_alignment_sell = ema5 < ema10  # EMA5 < EMA10 pour confirmation
         
         if sell_trend and sell_momentum and ema_alignment_sell:
-            logging.info("🔍 Conditions SELL remplies - Calcul TP/SL...")
+            logging.info("🔍 Conditions SELL remplies - Calcul TP/SL dynamique...")
             
-            # NOUVELLE LOGIQUE : TP à 5 barres, SL à 1000 barres
-            # TP à 5 barres = 5 pips = 0.05
-            tp_distance = 0.05  # 5 pips
+            sl_price = price + sl_distance
             tp_price = price - tp_distance
             
-            # SL à 1000 barres = 1000 pips = 10.00
-            sl_distance = 10.00  # 1000 pips
-            sl_price = price + sl_distance
+            rr_ratio_calculated = tp_distance / sl_distance
+            logging.info(f"🔍 Signal SELL détecté - R/R: {rr_ratio_calculated:.2f}:1")
+            logging.info(f"💰 TP: +{tp_distance:.3f} | SL: -{sl_distance:.3f} (ATR dynamique)")
             
-            # Vérification des distances
-            if tp_distance > 0 and sl_distance > 0:
-                rr_ratio = tp_distance / sl_distance  # Sera 0.005 (1:200)
-                logging.info(f"🔍 Signal SELL détecté - R/R: {rr_ratio:.3f}:1")
-                logging.info(f"⚡ TP: +{tp_distance:.2f} (5 barres) | SL: -{sl_distance:.2f} (1000 barres)")
-                
-                return {
-                    'signal': 'SELL',
-                    'entry': data['bid'],
-                    'sl': sl_price,
-                    'tp': tp_price,
-                    'rr_ratio': rr_ratio
-                }
+            return {
+                'signal': 'SELL',
+                'entry': data['bid'],
+                'sl': sl_price,
+                'tp': tp_price,
+                'rr_ratio': rr_ratio_calculated
+            }
         
         # Aucun signal valide
         logging.info("⏳ Pas de signal - Conditions non remplies")
@@ -319,7 +321,7 @@ def place_order(signal_data):
             "sl": signal_data['sl'],
             "tp": signal_data['tp'],
             "magic": MAGIC_NUMBER,
-            "comment": f"RapidBot-RR{signal_data['rr_ratio']:.1f}",
+            "comment": f"ATR_Bot_RR{signal_data['rr_ratio']:.2f}",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling_mode,
         }
@@ -388,9 +390,9 @@ def main():
     logging.info(f"📊 R/R cible: {MIN_RR_RATIO}:1 (informatif)")
     logging.info("🎯 Momentum: ±0.005% (plus réactif)")
     logging.info("⚡ Délai entre trades: 1 seconde")
-    logging.info(f"🎯 Limites: {MAX_BUY_POSITIONS} BUY + {MAX_SELL_POSITIONS} SELL = {MAX_POSITIONS_TOTAL} max")
-    logging.info("🎯 TP: 5 barres (5 pips) | SL: 1000 barres (1000 pips)")
-    logging.info("✅ TOUS LES SIGNAUX SONT EXÉCUTÉS !")
+    logging.info(f"🎯 Limites CONSERVATRICES: {MAX_BUY_POSITIONS} BUY + {MAX_SELL_POSITIONS} SELL = {MAX_POSITIONS_TOTAL} max")
+    logging.info("🧠 Stratégie: QUALITÉ > QUANTITÉ (Scalping sain)")
+    logging.info("🛡️ Gestion risque: ATR dynamique + R/R 1.5:1")
     
     iteration = 0
     last_signal_time = 0
