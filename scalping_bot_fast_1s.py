@@ -14,22 +14,27 @@ from datetime import datetime
 
 # Import des paramètres de configuration
 try:
-    from config import (MAX_BUY_POSITIONS, MAX_SELL_POSITIONS, MAX_POSITIONS_TOTAL, 
-                       RISK_REWARD_RATIO, ATR_MULTIPLIER, MIN_SL_DISTANCE, MAX_SL_DISTANCE)
+    from config import (RISK_REWARD_RATIO, ATR_MULTIPLIER, MIN_SL_DISTANCE, MAX_SL_DISTANCE,
+                       CONFIDENCE_SCORE_REQUIRED)
 except ImportError:
-    # Valeurs par défaut si config.py n'est pas trouvé (SCALPING SAIN)
-    MAX_BUY_POSITIONS = 1
-    MAX_SELL_POSITIONS = 1
-    MAX_POSITIONS_TOTAL = 2
+    # Valeurs par défaut si config.py n'est pas trouvé (SCALPING ÉQUILIBRÉ)
     RISK_REWARD_RATIO = 1.5
     ATR_MULTIPLIER = 1.5
     MIN_SL_DISTANCE = 0.10
     MAX_SL_DISTANCE = 2.00
+    CONFIDENCE_SCORE_REQUIRED = 2
+
+# Paramètres de trading intelligents
+MAX_TRADES_PER_MINUTE = 5  # Maximum 5 positions par minute
+RISK_PER_TRADE_PERCENT = 1.0  # 1% de risque par trade (adaptatif)
 
 # Configuration
 SYMBOL = "XAUUSD"
 MAGIC_NUMBER = 123462
 MIN_RR_RATIO = 1.5  # Ratio R/R cible (informatif seulement)
+
+# Variables globales pour le suivi des trades
+trade_timestamps = []  # Liste des timestamps des trades
 
 # Configuration du logging
 logging.basicConfig(
@@ -113,8 +118,8 @@ def get_signal(data):
         resistance = data['resistance']
         support = data['support']
 
-        # Paramètres de la stratégie
-        CONFIDENCE_SCORE_REQUIRED = 3  # Exiger un score de 3/3 pour un signal de haute qualité
+        # Paramètres de la stratégie (configurable via config.py)
+        # CONFIDENCE_SCORE_REQUIRED est maintenant importé du fichier config
 
         # Log de l'analyse technique générale
         trend_status = "📈 HAUSSIER" if price > ema5 > ema10 else "📉 BAISSIER" if price < ema5 < ema10 else "↔️ NEUTRE"
@@ -132,8 +137,8 @@ def get_signal(data):
             buy_score += 1
             logging.info("✅ BUY Condition 1: Tendance haussière confirmée")
         
-        # Condition 2: Momentum (RSI)
-        if rsi > 52:  # 52 au lieu de 50 pour une confirmation plus forte
+        # Condition 2: Momentum (RSI) - Moins strict pour plus d'agressivité
+        if rsi > 50:  # Retour à 50 au lieu de 52 pour plus de trades
             buy_score += 1
             logging.info("✅ BUY Condition 2: RSI confirme la force acheteuse")
             
@@ -179,8 +184,8 @@ def get_signal(data):
             sell_score += 1
             logging.info("✅ SELL Condition 1: Tendance baissière confirmée")
         
-        # Condition 2: Momentum (RSI)
-        if rsi < 48:  # 48 au lieu de 50 pour une confirmation plus forte
+        # Condition 2: Momentum (RSI) - Moins strict pour plus d'agressivité
+        if rsi < 50:  # Retour à 50 au lieu de 48 pour plus de trades
             sell_score += 1
             logging.info("✅ SELL Condition 2: RSI confirme la force vendeuse")
 
@@ -226,82 +231,103 @@ def get_signal(data):
         logging.error(f"❌ Erreur signal: {e}")
         return None
 
-def calculate_lot_size():
-    """Calcul de la taille de lot (version conservatrice avec gestion de marge)"""
-    account_info = mt5.account_info()
-    if account_info is None:
-        return 0.01  # Défaut très conservateur
+def can_place_trade():
+    """Vérifie si on peut placer un trade (max 5 par minute)"""
+    global trade_timestamps
+    current_time = time.time()
     
-    balance = account_info.balance
-    margin_free = account_info.margin_free
+    # Nettoyer les timestamps plus anciens que 1 minute
+    minute_ago = current_time - 60  # 60 secondes = 1 minute
+    trade_timestamps = [ts for ts in trade_timestamps if ts > minute_ago]
     
-    # Calcul conservateur : 2% de risque maximum
-    risk_amount = balance * 0.02  # 2% de risque (conservateur)
+    # Vérifier le nombre de trades dans la dernière minute
+    trades_last_minute = len(trade_timestamps)
     
-    # Calcul initial du lot avec diviseur standard
-    lot_size = risk_amount / 3000  # Diviseur augmenté pour conservatisme
+    if trades_last_minute >= MAX_TRADES_PER_MINUTE:
+        next_allowed_trade = min(trade_timestamps) + 60
+        wait_time = next_allowed_trade - current_time
+        logging.warning(f"⏳ Limite de {MAX_TRADES_PER_MINUTE} trades/minute atteinte. Attente {wait_time:.0f}s")
+        return False
     
-    # Vérification de la marge disponible
-    # Estimation: 1 lot XAUUSD ≈ 3300$ de marge requise
-    estimated_margin_needed = lot_size * 3300
-    
-    # Si pas assez de marge libre, réduire drastiquement
-    if estimated_margin_needed > margin_free * 0.6:  # Garder 40% de marge libre
-        lot_size = (margin_free * 0.4) / 3300  # Utiliser max 40% de la marge libre
-        logging.info(f"⚠️ Marge limitée! Lot réduit à {lot_size:.2f}")
-    
-    # Limites strictes et conservatrices
-    lot_size = max(0.01, min(0.05, round(lot_size, 2)))  # Entre 0.01 et 0.05 max
-    
-    logging.info(f"💰 Balance: {balance:.2f} | Marge libre: {margin_free:.2f} | Lot conservateur: {lot_size}")
-    return lot_size
+    logging.info(f"✅ Trades cette minute: {trades_last_minute}/{MAX_TRADES_PER_MINUTE}")
+    return True
+
+def record_trade():
+    """Enregistre le timestamp d'un trade placé"""
+    global trade_timestamps
+    trade_timestamps.append(time.time())
+
+def calculate_adaptive_lot_size(sl_distance):
+    """Calcul adaptatif de la taille de lot basé sur la balance et le SL"""
+    try:
+        account_info = mt5.account_info()
+        if account_info is None:
+            return 0.01  # Défaut sécurisé
+        
+        balance = account_info.balance
+        margin_free = account_info.margin_free
+        
+        # Calcul du risque en $ basé sur le pourcentage de la balance
+        risk_amount = balance * (RISK_PER_TRADE_PERCENT / 100)  # Conversion en décimal
+        
+        # Calcul du lot basé sur la distance SL réelle
+        # Pour XAUUSD: 1 point = $1 pour 1 lot, donc 0.01 point = $0.01 pour 1 lot
+        sl_distance_points = sl_distance * 10000  # Conversion en points (0.01 = 1 point)
+        
+        if sl_distance_points > 0:
+            # 1 lot XAUUSD avec 1 point de mouvement = 1$ de P&L
+            lot_size = risk_amount / sl_distance_points
+        else:
+            lot_size = 0.01  # Sécurité si SL invalide
+        
+        # Vérification de la marge nécessaire (estimation XAUUSD ≈ 100$ par 0.01 lot)
+        estimated_margin_needed = lot_size * 10000  # Estimation conservative
+        
+        # Ajustement si pas assez de marge libre
+        if estimated_margin_needed > margin_free * 0.7:  # Garder 30% de marge libre
+            lot_size = (margin_free * 0.5) / 10000  # Utiliser max 50% de la marge libre
+            logging.info(f"⚠️ Marge limitée! Lot ajusté à {lot_size:.3f}")
+        
+        # Arrondir au centième pour respecter les contraintes MT5 (0.01, 0.02, etc.)
+        lot_size = round(lot_size, 2)
+        
+        # Limites min/max avec plus de flexibilité
+        lot_size = max(0.01, min(1.0, lot_size))  # Entre 0.01 et 1.0 lot max
+        
+        # Logs informatifs
+        risk_percent_actual = (lot_size * sl_distance_points / balance) * 100
+        logging.info(f"💰 Balance: {balance:.2f}$ | Risque ciblé: {RISK_PER_TRADE_PERCENT}% ({risk_amount:.2f}$)")
+        logging.info(f"📊 SL: {sl_distance:.3f} | Lot calculé: {lot_size:.2f} | Risque réel: {risk_percent_actual:.2f}%")
+        
+        return lot_size
+        
+    except Exception as e:
+        logging.error(f"❌ Erreur calcul lot: {e}")
+        return 0.01
 
 def place_order(signal_data):
-    """Placement d'ordre avec gestion d'erreur et vérification de marge"""
+    """Placement d'ordre avec gestion intelligente du volume et limite par minute"""
     try:
-        # Vérification du nombre de positions ouvertes avec limites séparées BUY/SELL
-        positions = mt5.positions_get(symbol=SYMBOL)
+        # 1. Vérification de la limite de trades par minute
+        if not can_place_trade():
+            return False
         
-        if positions is not None:
-            # Compter les positions BUY et SELL séparément
-            buy_positions = len([p for p in positions if p.type == 0])  # TYPE_BUY = 0
-            sell_positions = len([p for p in positions if p.type == 1])  # TYPE_SELL = 1
-            total_positions = len(positions)
-            
-            # Vérification de la limite totale
-            if total_positions >= MAX_POSITIONS_TOTAL:
-                logging.warning(f"⚠️ Limite totale atteinte ({total_positions}/{MAX_POSITIONS_TOTAL}) - Trade annulé")
-                return False
-            
-            # Vérification des limites spécifiques BUY/SELL
-            if signal_data['signal'] == 'BUY' and buy_positions >= MAX_BUY_POSITIONS:
-                logging.warning(f"⚠️ Limite BUY atteinte ({buy_positions}/{MAX_BUY_POSITIONS}) - Trade BUY annulé")
-                return False
-                
-            if signal_data['signal'] == 'SELL' and sell_positions >= MAX_SELL_POSITIONS:
-                logging.warning(f"⚠️ Limite SELL atteinte ({sell_positions}/{MAX_SELL_POSITIONS}) - Trade SELL annulé")
-                return False
-        
-        # Vérification préalable de la marge disponible
+        # 2. Vérification de la marge disponible
         account_info = mt5.account_info()
         if account_info is None:
             logging.error("❌ Impossible de récupérer les informations du compte")
             return False
             
         margin_free = account_info.margin_free
-        if margin_free < 500:  # Marge libre minimum augmentée à 500$
+        if margin_free < 300:  # Marge libre minimum réduite à 300$
             logging.warning(f"⚠️ Marge libre insuffisante: {margin_free:.2f}$ - Trade annulé")
             return False
         
-        lot = calculate_lot_size()
+        # 3. Calcul adaptatif du lot basé sur le SL
+        sl_distance = abs(signal_data['entry'] - signal_data['sl'])
+        lot = calculate_adaptive_lot_size(sl_distance)
         
-        # Double vérification: estimation de la marge nécessaire
-        estimated_margin = lot * 3300  # Estimation pour XAUUSD
-        if estimated_margin > margin_free * 0.8:
-            logging.warning(f"⚠️ Marge estimée trop élevée ({estimated_margin:.2f}$ > {margin_free*0.8:.2f}$) - Trade annulé")
-            return False
-        
-        # Préparation de la requête
+        # 4. Préparation de la requête
         if signal_data['signal'] == 'BUY':
             order_type = mt5.ORDER_TYPE_BUY
             price = signal_data['entry']
@@ -311,7 +337,7 @@ def place_order(signal_data):
             price = signal_data['entry']
             action = "📉 SELL"
         
-        # Vérification des niveaux pour éviter "Invalid stops"
+        # 5. Vérification des niveaux pour éviter "Invalid stops"
         symbol_info = mt5.symbol_info(SYMBOL)
         min_stop_level = symbol_info.trade_stops_level
         point = symbol_info.point
@@ -322,33 +348,33 @@ def place_order(signal_data):
         
         logging.info(f"🔧 Distance min requise: {min_distance_points} points ({min_distance_price:.2f})")
         
-        # Ajustement si nécessaire
+        # 6. Ajustement si nécessaire
         if signal_data['signal'] == 'BUY':
             # Pour BUY: SL doit être en dessous du prix d'au moins min_distance
-            sl_distance = price - signal_data['sl']
-            tp_distance = signal_data['tp'] - price
+            sl_distance_check = price - signal_data['sl']
+            tp_distance_check = signal_data['tp'] - price
             
-            if sl_distance < min_distance_price:
+            if sl_distance_check < min_distance_price:
                 signal_data['sl'] = price - min_distance_price
                 logging.info(f"⚠️ SL ajusté: {signal_data['sl']:.2f} (distance min respectée)")
                 
-            if tp_distance < min_distance_price:
+            if tp_distance_check < min_distance_price:
                 signal_data['tp'] = price + min_distance_price
                 logging.info(f"⚠️ TP ajusté: {signal_data['tp']:.2f} (distance min respectée)")
         else:
             # Pour SELL: SL doit être au dessus du prix d'au moins min_distance
-            sl_distance = signal_data['sl'] - price
-            tp_distance = price - signal_data['tp']
+            sl_distance_check = signal_data['sl'] - price
+            tp_distance_check = price - signal_data['tp']
             
-            if sl_distance < min_distance_price:
+            if sl_distance_check < min_distance_price:
                 signal_data['sl'] = price + min_distance_price
                 logging.info(f"⚠️ SL ajusté: {signal_data['sl']:.2f} (distance min respectée)")
                 
-            if tp_distance < min_distance_price:
+            if tp_distance_check < min_distance_price:
                 signal_data['tp'] = price - min_distance_price
                 logging.info(f"⚠️ TP ajusté: {signal_data['tp']:.2f} (distance min respectée)")
         
-        # Déterminer le mode de remplissage disponible
+        # 7. Déterminer le mode de remplissage disponible
         symbol_info = mt5.symbol_info(SYMBOL)
         filling_mode = mt5.ORDER_FILLING_FOK
         
@@ -360,6 +386,7 @@ def place_order(signal_data):
         else:
             filling_mode = mt5.ORDER_FILLING_RETURN  # Mode par défaut
         
+        # 8. Création et envoi de la requête
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": SYMBOL,
@@ -369,7 +396,7 @@ def place_order(signal_data):
             "sl": signal_data['sl'],
             "tp": signal_data['tp'],
             "magic": MAGIC_NUMBER,
-            "comment": f"ATR_Bot_RR{signal_data['rr_ratio']:.2f}",
+            "comment": f"AdaptiveBot_RR{signal_data['rr_ratio']:.2f}",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling_mode,
         }
@@ -377,13 +404,16 @@ def place_order(signal_data):
         result = mt5.order_send(request)
         
         if result.retcode == mt5.TRADE_RETCODE_DONE:
+            # 9. Enregistrer le trade pour le compteur par minute
+            record_trade()
+            
             distance_sl = abs(price - signal_data['sl']) / 0.01
             distance_tp = abs(signal_data['tp'] - price) / 0.01
             
-            logging.info(f"{action}: Lot={lot} Prix={price:.2f}")
+            logging.info(f"🎯 {action}: Lot adaptatif={lot} Prix={price:.2f}")
             logging.info(f"🎯 TP={signal_data['tp']:.2f} ({distance_tp:.0f}p) | SL={signal_data['sl']:.2f} ({distance_sl:.0f}p)")
-            logging.info(f"📊 R/R: {signal_data['rr_ratio']:.2f}:1")
-            logging.info(f"✅ Ordre #{result.order} exécuté !")
+            logging.info(f"📊 R/R: {signal_data['rr_ratio']:.2f}:1 | Risque: {RISK_PER_TRADE_PERCENT}%")
+            logging.info(f"✅ Ordre #{result.order} exécuté avec succès !")
             return True  # Ordre exécuté avec succès
         else:
             logging.error(f"❌ Échec ordre: {result.retcode} - {result.comment}")
@@ -394,7 +424,7 @@ def place_order(signal_data):
         return False  # Erreur lors du placement
 
 def check_positions():
-    """Vérification des positions avec logs détaillés"""
+    """Vérification des positions avec logs détaillés (nouvelle version adaptative)"""
     try:
         positions = mt5.positions_get(symbol=SYMBOL, magic=MAGIC_NUMBER)
         account_info = mt5.account_info()
@@ -408,19 +438,31 @@ def check_positions():
             buy_count = len([p for p in positions if p.type == 0])
             sell_count = len([p for p in positions if p.type == 1])
             
+            # Calcul du nombre de trades dans la dernière minute pour info
+            current_time = time.time()
+            minute_ago = current_time - 60
+            recent_trades = len([ts for ts in trade_timestamps if ts > minute_ago])
+            
             logging.info(f"📊 {len(positions)} position(s) ouvertes:")
-            logging.info(f"   📈 BUY: {buy_count}/{MAX_BUY_POSITIONS} | 📉 SELL: {sell_count}/{MAX_SELL_POSITIONS}")
+            logging.info(f"   📈 BUY: {buy_count} | 📉 SELL: {sell_count}")
             logging.info(f"   💵 Profit total: {total_profit:.2f}")
+            logging.info(f"   ⏱️ Trades cette minute: {recent_trades}/{MAX_TRADES_PER_MINUTE}")
             
             # Détail des positions si peu nombreuses
-            if len(positions) <= 3:
+            if len(positions) <= 5:
                 for i, pos in enumerate(positions):
                     direction = "📈 BUY" if pos.type == 0 else "📉 SELL"
-                    logging.info(f"   Position {i+1}: {direction} | Profit: {pos.profit:.2f}")
+                    logging.info(f"   Position {i+1}: {direction} | Volume: {pos.volume} | Profit: {pos.profit:.2f}")
             
             return len(positions)
         else:
+            # Afficher quand même les trades récents même sans positions
+            current_time = time.time()
+            minute_ago = current_time - 60
+            recent_trades = len([ts for ts in trade_timestamps if ts > minute_ago])
+            
             logging.info("📊 Aucune position ouverte")
+            logging.info(f"⏱️ Trades cette minute: {recent_trades}/{MAX_TRADES_PER_MINUTE}")
             return 0
             
     except Exception as e:
@@ -428,18 +470,18 @@ def check_positions():
         return 0
 
 def main():
-    """Boucle principale rapide (2 secondes)"""
+    """Boucle principale avec gestion adaptative intelligente"""
     if not mt5.initialize():
         logging.error("❌ Échec initialisation MT5")
         return
     
-    logging.info("🚀 Bot Rapide XAUUSD démarré !")
+    logging.info("🚀 Bot Adaptatif XAUUSD démarré !")
     logging.info("⏱️ Analyse: toutes les 1 seconde")
     logging.info(f"📊 R/R cible: {MIN_RR_RATIO}:1 (informatif)")
     logging.info("🎯 Momentum: ±0.005% (plus réactif)")
     logging.info("⚡ Délai entre trades: 1 seconde")
-    logging.info(f"🎯 Limites CONSERVATRICES: {MAX_BUY_POSITIONS} BUY + {MAX_SELL_POSITIONS} SELL = {MAX_POSITIONS_TOTAL} max")
-    logging.info("🧠 Stratégie: QUALITÉ > QUANTITÉ (Scalping sain)")
+    logging.info(f"🧠 Gestion intelligente: MAX {MAX_TRADES_PER_MINUTE} trades/minute")
+    logging.info(f"💰 Lot adaptatif: {RISK_PER_TRADE_PERCENT}% de risque par trade")
     logging.info("🛡️ Gestion risque: ATR dynamique + R/R 1.5:1")
     
     iteration = 0
