@@ -631,19 +631,91 @@ def main():
     if df is None:
         return
     
-    # Test sur la dernière année pour validation
-    end_date = df.index[-1]
-    start_date = end_date - timedelta(days=365)
-    logging.info(f"Test ultra-optimisé sur 1 dernière année: {start_date} → {end_date}")
+    print("\n📅 OPTIONS DE PÉRIODE DE TEST:")
+    print("1. Toute la période disponible (2021-2025) - RECOMMANDÉ")
+    print("2. 6 derniers mois")
+    print("3. 1 dernière année")
+    print("4. Période personnalisée")
     
-    # Lancer le backtesting ultra-optimisé
-    trades, final_balance = run_ultra_backtest(df, start_date, end_date)
-    
-    # Sauvegarder les résultats
-    if trades:
-        trades_df = pd.DataFrame(trades)
-        trades_df.to_csv("sniper_backtest_ultra_optimized.csv", index=False)
-        logging.info("💾 Résultats ultra-optimisés sauvegardés dans 'sniper_backtest_ultra_optimized.csv'")
+    try:
+        choice = input("\nChoisissez une option (1-4) [défaut=1]: ").strip()
+        if not choice:
+            choice = "1"
+        
+        start_date = None
+        end_date = None
+        
+        if choice == "2":
+            end_date = df.index[-1]
+            start_date = end_date - timedelta(days=180)
+            logging.info(f"Test sur 6 derniers mois: {start_date} → {end_date}")
+        elif choice == "3":
+            end_date = df.index[-1]
+            start_date = end_date - timedelta(days=365)
+            logging.info(f"Test sur 1 dernière année: {start_date} → {end_date}")
+        elif choice == "4":
+            start_str = input("Date de début (YYYY-MM-DD): ").strip()
+            end_str = input("Date de fin (YYYY-MM-DD): ").strip()
+            start_date = pd.to_datetime(start_str)
+            end_date = pd.to_datetime(end_str)
+            logging.info(f"Test sur période personnalisée: {start_date} → {end_date}")
+        else:
+            logging.info("Test sur TOUTE la période disponible (2021-2025)")
+            start_date = None
+            end_date = None
+        
+        # Lancer le backtesting ultra-optimisé
+        trades, final_balance = run_ultra_backtest(df, start_date, end_date)
+        
+        # Générer nom de fichier avec timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        period_suffix = "complete" if start_date is None else f"{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}"
+        filename = f"sniper_ultra_{period_suffix}_{timestamp}.csv"
+        
+        # Sauvegarder les résultats (même si aucun trade)
+        if trades:
+            trades_df = pd.DataFrame(trades)
+            trades_df.to_csv(filename, index=False)
+            logging.info(f"💾 Résultats ultra-optimisés sauvegardés: {filename}")
+        else:
+            # Créer un rapport détaillé même sans trades
+            period_start = df.index[0] if start_date is None else start_date
+            period_end = df.index[-1] if end_date is None else end_date
+            period_data = df if start_date is None and end_date is None else df[start_date:end_date]
+            
+            empty_report = pd.DataFrame([{
+                'Strategie': 'Sniper Ultra-Optimisé v3.0',
+                'Periode_debut': period_start.strftime('%Y-%m-%d %H:%M'),
+                'Periode_fin': period_end.strftime('%Y-%m-%d %H:%M'),
+                'Nombre_bougies': len(period_data),
+                'Total_trades': 0,
+                'Balance_initiale': INITIAL_BALANCE,
+                'Balance_finale': final_balance,
+                'Profit_total': final_balance - INITIAL_BALANCE,
+                'Rendement_pct': 0.0,
+                'Win_rate_pct': 0.0,
+                'Statut': 'Aucun signal généré - Filtres très restrictifs',
+                'Parametres_MIN_DIVERGENCE_STRENGTH': MIN_DIVERGENCE_STRENGTH,
+                'Parametres_ATR_MINIMUM_MULTIPLIER': ATR_MINIMUM_MULTIPLIER,
+                'Parametres_MIN_RR_RATIO_REQUIRED': MIN_RR_RATIO_REQUIRED,
+                'Recommandation': 'Assouplir MIN_DIVERGENCE_STRENGTH de 8 à 6',
+                'Recommandation_2': 'Réduire ATR_MINIMUM_MULTIPLIER de 1.2 à 1.0',
+                'Recommandation_3': 'Tester MIN_RR_RATIO_REQUIRED de 1.5 à 1.3'
+            }])
+            empty_report.to_csv(filename, index=False)
+            logging.info(f"💾 Rapport diagnostic détaillé sauvegardé: {filename}")
+            logging.info("🔧 DIAGNOSTIC: Filtres ultra-restrictifs - Stratégie trop sélective")
+            logging.info("💡 SOLUTIONS SUGGÉRÉES:")
+            logging.info("   • Réduire MIN_DIVERGENCE_STRENGTH de 8 à 6")
+            logging.info("   • Assouplir ATR_MINIMUM_MULTIPLIER de 1.2 à 1.0")
+            logging.info("   • Tester MIN_RR_RATIO_REQUIRED de 1.5 à 1.3")
+            
+    except KeyboardInterrupt:
+        logging.info("🛑 Backtesting interrompu par l'utilisateur")
+    except Exception as e:
+        logging.error(f"❌ Erreur durant le backtesting: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
