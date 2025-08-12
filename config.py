@@ -1,47 +1,60 @@
-# Configuration du Bot de Trading XAUUSD - Version Adaptative
-# Modifiez ces paramètres selon vos besoins
-
 # =============================================================================
 # PARAMÈTRES DE CONNEXION MT5
 # =============================================================================
-MT5_LOGIN = 95431708
-MT5_PASSWORD = "5uBpUk-p"
+MT5_LOGIN = 5039077525
+MT5_PASSWORD = "!oNvKqS4"
 MT5_SERVER = "MetaQuotes-Demo"  # Changez selon votre broker
 
 # =============================================================================
-# PARAMÈTRES DE TRADING ADAPTATIF
+# STRATÉGIE "HYPER-SCALPING" (GAINS RAPIDES DE QUELQUES CENTIMES)
 # =============================================================================
 SYMBOL = "XAUUSD"
 
-# === GESTION DU RISQUE ADAPTATIVE ===
-RISK_REWARD_RATIO = 1.5  # Ratio Risk/Reward (1.5:1 = 1.5$ de gain pour 1$ de risque)
-ATR_MULTIPLIER = 1.5     # Multiplicateur ATR pour calcul dynamique SL/TP
-MIN_SL_DISTANCE = 0.10   # Distance minimum SL en $ (sécurité)
-MAX_SL_DISTANCE = 2.00   # Distance maximum SL en $ (éviter les SL trop larges)
+# === GESTION DU TRADE ===
+# Take Profit en points de prix (ex: 0.30 = 0.30 de différence dans le prix XAUUSD). 
+# ⚠️ C'est le paramètre le plus important pour cette stratégie !
+# 5.0 points de prix = distance bien supérieure au minimum de 0.2 points requis par MT5
+FIXED_TP_DOLLARS = 0.25
 
-# === SCORE DE CONFIANCE CONFIGURABLE ===
-# 1 = Ultra-agressif (1/3 conditions = BEAUCOUP de trades)
-# 2 = Équilibré (2/3 conditions = trades fréquents mais filtrés)  [RECOMMANDÉ]
-# 3 = Conservateur (3/3 conditions = trades rares mais de haute qualité)
-CONFIDENCE_SCORE_REQUIRED = 2
+# Ratio du Stop Loss par rapport au Take Profit.
+# 10.0 signifie que le SL sera 10 fois plus grand que le TP (50.0 points de prix pour 5.0 points de gain).
+SL_MULTIPLIER = 10.0
 
-# =============================================================================
-# PARAMÈTRES D'ANALYSE TECHNIQUE (LEGACY - GARDÉS POUR COMPATIBILITÉ)
-# =============================================================================
-MA_PERIOD = 5
-TICK_COUNT = 20
-VOLATILITY_THRESHOLD = 0.5
-LOT_SIZE = 0.01  # ⚠️ Obsolète - Maintenant calculé dynamiquement
-TAKE_PROFIT_PIPS = 8  # ⚠️ Obsolète - Maintenant basé sur ATR
+# Taille du lot FIXE. Le calcul adaptatif est trop risqué pour cette stratégie.
+# ⚠️ COMMENCEZ TRÈS PETIT (0.01) !
+FIXED_LOT_SIZE = 0.01
+
+# === NIVEAU D'AGRESSIVITÉ ===
+# 1 = Ultra-agressif (fréquence maximale). RECOMMANDÉ pour cette stratégie.
+# 2 = Équilibré
+# 3 = Conservateur
+CONFIDENCE_SCORE_REQUIRED = 3
 
 # =============================================================================
 # PARAMÈTRES OPÉRATIONNELS
 # =============================================================================
-ANALYSIS_INTERVAL = 1  # Intervalle entre analyses (en secondes)
-MAGIC_NUMBER = 123456  # Numéro magique pour identifier les trades du bot
+ANALYSIS_INTERVAL = 1  # 1 seconde
+MAGIC_NUMBER = 123456
 
 # =============================================================================
 # PARAMÈTRES DE LOG
 # =============================================================================
-LOG_ACTIVE_INTERVAL = 60  # Fréquence du log "bot actif" (en itérations)
-LOG_POSITION_INTERVAL = 30  # Fréquence du log "position ouverte" (en itérations)
+LOG_ACTIVE_INTERVAL = 60
+LOG_POSITION_INTERVAL = 30
+
+# =============================================================================
+# ANCIENS PARAMÈTRES (GARDÉS POUR COMPATIBILITÉ)
+# =============================================================================
+# Ces paramètres ne sont plus utilisés dans la stratégie Hyper-Scalping
+# mais gardés pour éviter les erreurs d'importation
+RISK_REWARD_RATIO = 1.5  # Obsolète - remplacé par SL_MULTIPLIER
+RISK_PER_TRADE_PERCENT = 1.0  # Obsolète - remplacé par FIXED_LOT_SIZE
+MAX_TRADES_PER_MINUTE = 999  # Limite désactivée pour Hyper-Scalping extrême
+ATR_MULTIPLIER = 1.5     # Obsolète
+MIN_SL_DISTANCE = 0.10   # Obsolète
+MAX_SL_DISTANCE = 2.00   # Obsolète
+MA_PERIOD = 100
+TICK_COUNT = 20
+VOLATILITY_THRESHOLD = 0.5
+LOT_SIZE = 0.01  # Obsolète
+TAKE_PROFIT_PIPS = 8  # Obsolète

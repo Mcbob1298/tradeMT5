@@ -12,17 +12,24 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-# Import des paramètres de configuration
+# Import des paramètres de configuration Hyper-Scalping
 try:
-    from config import (RISK_REWARD_RATIO, ATR_MULTIPLIER, MIN_SL_DISTANCE, MAX_SL_DISTANCE,
-                       CONFIDENCE_SCORE_REQUIRED)
+    from config import (FIXED_TP_DOLLARS, SL_MULTIPLIER, FIXED_LOT_SIZE,
+                       CONFIDENCE_SCORE_REQUIRED, MAX_TRADES_PER_MINUTE)
 except ImportError:
-    # Valeurs par défaut si config.py n'est pas trouvé (SCALPING ÉQUILIBRÉ)
-    RISK_REWARD_RATIO = 1.5
-    ATR_MULTIPLIER = 1.5
-    MIN_SL_DISTANCE = 0.10
-    MAX_SL_DISTANCE = 2.00
-    CONFIDENCE_SCORE_REQUIRED = 2
+    # Valeurs par défaut Hyper-Scalping
+    FIXED_TP_DOLLARS = 0.10
+    SL_MULTIPLIER = 2.0
+    FIXED_LOT_SIZE = 0.01
+    CONFIDENCE_SCORE_REQUIRED = 1
+    MAX_TRADES_PER_MINUTE = 5
+
+# Anciens paramètres pour compatibilité
+RISK_REWARD_RATIO = 1 / SL_MULTIPLIER  # Conversion inverse
+ATR_MULTIPLIER = 1.5
+MIN_SL_DISTANCE = 0.10
+MAX_SL_DISTANCE = 2.00
+RISK_PER_TRADE_PERCENT = 1.0
 
 # Paramètres de trading intelligents
 MAX_TRADES_PER_MINUTE = 5  # Maximum 5 positions par minute
