@@ -39,11 +39,11 @@ logging.basicConfig(
 )
 
 def get_market_data():
-    """Récupération rapide des données de marché"""
+    """Récupération rapide des données de marché avec RSI"""
     try:
-        # Données récentes
-        rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 0, 20)
-        if rates is None or len(rates) < 10:
+        # Données récentes (on prend plus de barres pour le RSI)
+        rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 0, 50)  # 50 périodes pour RSI(14) stable
+        if rates is None or len(rates) < 20:  # Vérification de 20 barres min
             logging.warning("❌ Données insuffisantes")
             return None
         
@@ -58,6 +58,14 @@ def get_market_data():
         # Log des prix en temps réel
         logging.info(f"💹 Prix: Bid={tick.bid:.2f} Ask={tick.ask:.2f} Spread={tick.ask-tick.bid:.2f}")
         
+        # --- AJOUT DU CALCUL RSI ---
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['rsi'] = 100 - (100 / (1 + rs))
+        # --- FIN DE L'AJOUT ---
+        
         # Calculs simples et rapides
         df['ema5'] = df['close'].ewm(span=5).mean()
         df['ema10'] = df['close'].ewm(span=10).mean()
@@ -70,8 +78,8 @@ def get_market_data():
         recent_high = df['high'].tail(10).max()
         recent_low = df['low'].tail(10).min()
         
-        # Log des niveaux techniques
-        logging.info(f"📊 EMA5={df['ema5'].iloc[-1]:.2f} | EMA10={df['ema10'].iloc[-1]:.2f}")
+        # Log des niveaux techniques avec RSI
+        logging.info(f"📊 EMA5={df['ema5'].iloc[-1]:.2f} | EMA10={df['ema10'].iloc[-1]:.2f} | RSI(14)={df['rsi'].iloc[-1]:.2f}")
         logging.info(f"🔺 Résistance={recent_high:.2f} | 🔻 Support={recent_low:.2f}")
         logging.info(f"⚡ Momentum={((current_price - df['close'].iloc[-5]) / df['close'].iloc[-5] * 100):.3f}% | ATR={atr:.3f}")
         
@@ -85,7 +93,8 @@ def get_market_data():
             'atr': atr,
             'resistance': recent_high,
             'support': recent_low,
-            'momentum': (current_price - df['close'].iloc[-5]) / df['close'].iloc[-5] * 100
+            'momentum': (current_price - df['close'].iloc[-5]) / df['close'].iloc[-5] * 100,
+            'rsi': df['rsi'].iloc[-1]  # Retour de la valeur du RSI
         }
         
     except Exception as e:
@@ -93,52 +102,67 @@ def get_market_data():
         return None
 
 def get_signal(data):
-    """Génération de signal avec gestion du risque dynamique basée sur l'ATR"""
+    """Génération de signal renforcée avec un score de confiance"""
     try:
+        # Récupération des données
         price = data['current_price']
         ema5 = data['ema5']
         ema10 = data['ema10']
+        rsi = data['rsi']
         atr = data['atr']
         resistance = data['resistance']
         support = data['support']
-        momentum = data['momentum']
-        
-        # Log de l'analyse technique
+
+        # Paramètres de la stratégie
+        CONFIDENCE_SCORE_REQUIRED = 3  # Exiger un score de 3/3 pour un signal de haute qualité
+
+        # Log de l'analyse technique générale
         trend_status = "📈 HAUSSIER" if price > ema5 > ema10 else "📉 BAISSIER" if price < ema5 < ema10 else "↔️ NEUTRE"
-        momentum_status = "🚀 POSITIF" if momentum > 0.005 else "⬇️ NÉGATIF" if momentum < -0.005 else "😴 FAIBLE"
+        rsi_status = "🚀 FORT" if rsi > 60 else "⬇️ FAIBLE" if rsi < 40 else "� NEUTRE"
         
-        logging.info(f"🎯 Analyse: {trend_status} | Momentum: {momentum_status} ({momentum:.3f}%)")
+        logging.info(f"🎯 Analyse: {trend_status} | RSI: {rsi_status} ({rsi:.1f})")
         logging.info(f"📊 Prix: {price:.2f} | EMA5: {ema5:.2f} | EMA10: {ema10:.2f}")
         logging.info(f"📈 Support: {support:.2f} | Résistance: {resistance:.2f}")
+
+        # --- ÉVALUATION DU SIGNAL D'ACHAT (BUY) ---
+        buy_score = 0
         
-        # --- NOUVELLE LOGIQUE DE GESTION DU RISQUE DYNAMIQUE ---
-        # Calcul de la distance du SL basée sur la volatilité (ATR)
-        sl_distance_atr = atr * ATR_MULTIPLIER
+        # Condition 1: Tendance (croisement EMA)
+        if price > ema5 and ema5 > ema10:
+            buy_score += 1
+            logging.info("✅ BUY Condition 1: Tendance haussière confirmée")
         
-        # Application des limites minimum et maximum
-        sl_distance = max(MIN_SL_DISTANCE, min(sl_distance_atr, MAX_SL_DISTANCE))
-        
-        # Calcul de la distance du TP basée sur le ratio R/R
-        tp_distance = sl_distance * RISK_REWARD_RATIO
-        
-        # Log des calculs de risque
-        logging.info(f"⚡ ATR={atr:.3f} | SL distance={sl_distance:.3f} | TP distance={tp_distance:.3f}")
-        
-        # Signal BUY (conditions inchangées)
-        buy_trend = price > ema5  # Prix au-dessus de EMA5
-        buy_momentum = momentum > 0.005  # Momentum positif
-        ema_alignment = ema5 > ema10  # EMA5 > EMA10 pour confirmation
-        
-        if buy_trend and buy_momentum and ema_alignment:
-            logging.info("🔍 Conditions BUY remplies - Calcul TP/SL dynamique...")
+        # Condition 2: Momentum (RSI)
+        if rsi > 52:  # 52 au lieu de 50 pour une confirmation plus forte
+            buy_score += 1
+            logging.info("✅ BUY Condition 2: RSI confirme la force acheteuse")
             
+        # Condition 3: Confirmation de la tendance (prix par rapport à EMA10)
+        if price > ema10:
+            buy_score += 1
+            logging.info("✅ BUY Condition 3: Prix au-dessus d'EMA10")
+
+        logging.info(f"🔍 Analyse BUY: Score de confiance = {buy_score}/{CONFIDENCE_SCORE_REQUIRED}")
+
+        if buy_score >= CONFIDENCE_SCORE_REQUIRED:
+            logging.info("✅ Conditions BUY remplies - Calcul TP/SL dynamique...")
+            
+            # Calcul dynamique du risque
+            sl_distance_atr = atr * ATR_MULTIPLIER
+            sl_distance = max(MIN_SL_DISTANCE, min(sl_distance_atr, MAX_SL_DISTANCE))
+            tp_distance = sl_distance * RISK_REWARD_RATIO
             sl_price = price - sl_distance
             tp_price = price + tp_distance
             
-            rr_ratio_calculated = tp_distance / sl_distance
-            logging.info(f"🔍 Signal BUY détecté - R/R: {rr_ratio_calculated:.2f}:1")
-            logging.info(f"💰 TP: +{tp_distance:.3f} | SL: -{sl_distance:.3f} (ATR dynamique)")
+            # Filtre de sécurité: le TP est-il réaliste par rapport à la résistance ?
+            if tp_price > resistance:
+                logging.warning(f"⚠️ Signal BUY ignoré: le TP ({tp_price:.2f}) est au-dessus de la résistance ({resistance:.2f})")
+                return None
             
+            rr_ratio_calculated = tp_distance / sl_distance
+            logging.info(f"🔍 Signal BUY de haute qualité - R/R: {rr_ratio_calculated:.2f}:1")
+            logging.info(f"💰 TP: +{tp_distance:.3f} | SL: -{sl_distance:.3f} (ATR + Score)")
+
             return {
                 'signal': 'BUY',
                 'entry': data['ask'],
@@ -146,22 +170,46 @@ def get_signal(data):
                 'tp': tp_price,
                 'rr_ratio': rr_ratio_calculated
             }
+
+        # --- ÉVALUATION DU SIGNAL DE VENTE (SELL) ---
+        sell_score = 0
+
+        # Condition 1: Tendance (croisement EMA)
+        if price < ema5 and ema5 < ema10:
+            sell_score += 1
+            logging.info("✅ SELL Condition 1: Tendance baissière confirmée")
         
-        # Signal SELL (conditions inchangées)
-        sell_trend = price < ema5  # Prix en-dessous de EMA5
-        sell_momentum = momentum < -0.005  # Momentum négatif
-        ema_alignment_sell = ema5 < ema10  # EMA5 < EMA10 pour confirmation
-        
-        if sell_trend and sell_momentum and ema_alignment_sell:
-            logging.info("🔍 Conditions SELL remplies - Calcul TP/SL dynamique...")
+        # Condition 2: Momentum (RSI)
+        if rsi < 48:  # 48 au lieu de 50 pour une confirmation plus forte
+            sell_score += 1
+            logging.info("✅ SELL Condition 2: RSI confirme la force vendeuse")
+
+        # Condition 3: Confirmation de la tendance (prix par rapport à EMA10)
+        if price < ema10:
+            sell_score += 1
+            logging.info("✅ SELL Condition 3: Prix en-dessous d'EMA10")
+
+        logging.info(f"🔍 Analyse SELL: Score de confiance = {sell_score}/{CONFIDENCE_SCORE_REQUIRED}")
+
+        if sell_score >= CONFIDENCE_SCORE_REQUIRED:
+            logging.info("✅ Conditions SELL remplies - Calcul TP/SL dynamique...")
             
+            # Calcul dynamique du risque
+            sl_distance_atr = atr * ATR_MULTIPLIER
+            sl_distance = max(MIN_SL_DISTANCE, min(sl_distance_atr, MAX_SL_DISTANCE))
+            tp_distance = sl_distance * RISK_REWARD_RATIO
             sl_price = price + sl_distance
             tp_price = price - tp_distance
             
-            rr_ratio_calculated = tp_distance / sl_distance
-            logging.info(f"🔍 Signal SELL détecté - R/R: {rr_ratio_calculated:.2f}:1")
-            logging.info(f"💰 TP: +{tp_distance:.3f} | SL: -{sl_distance:.3f} (ATR dynamique)")
+            # Filtre de sécurité: le TP est-il réaliste par rapport au support ?
+            if tp_price < support:
+                logging.warning(f"⚠️ Signal SELL ignoré: le TP ({tp_price:.2f}) est en dessous du support ({support:.2f})")
+                return None
             
+            rr_ratio_calculated = tp_distance / sl_distance
+            logging.info(f"🔍 Signal SELL de haute qualité - R/R: {rr_ratio_calculated:.2f}:1")
+            logging.info(f"💰 TP: +{tp_distance:.3f} | SL: -{sl_distance:.3f} (ATR + Score)")
+
             return {
                 'signal': 'SELL',
                 'entry': data['bid'],
@@ -169,9 +217,9 @@ def get_signal(data):
                 'tp': tp_price,
                 'rr_ratio': rr_ratio_calculated
             }
-        
-        # Aucun signal valide
-        logging.info("⏳ Pas de signal - Conditions non remplies")
+
+        # Aucun signal de haute qualité
+        logging.info("⏳ Pas de signal de haute qualité - Conditions non remplies")
         return None
         
     except Exception as e:
