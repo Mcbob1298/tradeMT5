@@ -37,7 +37,7 @@ M15_SNIPER_CONFIG = {
 
 # --- STRATÉGIE M5 "LE COMMANDO" ---
 M5_COMMANDO_CONFIG = {
-    "ENABLED": True,
+    "ENABLED": False,  # Désactivé au profit d'ICT Silver Bullet
     "NAME": "Commando M5", 
     "MAGIC_NUMBER": 5001,
     "TIMEFRAME": "M5",
@@ -50,9 +50,22 @@ M5_COMMANDO_CONFIG = {
     "EMOJI": "⚡"
 }
 
-# --- STRATÉGIE M1 "L'HYPER-SCALPER" ---
+# --- STRATÉGIE M15 "LE STRATÈGE" ---
+M15_SNIPER_CONFIG = {
+    "ENABLED": False,  # Désactivé au profit d'ICT Silver Bullet
+    "NAME": "Sniper M15",
+    "MAGIC_NUMBER": 15001,
+    "TIMEFRAME": "M15",
+    "ADX_THRESHOLD": 25,
+    "MIN_DIVERGENCE_STRENGTH": 6.5,
+    "RR_RATIO": 1.8,
+    "SCAN_INTERVAL": 900,  # 15 minutes en secondes
+    "VOLUME": 0.02,  # Volume spécifique pour M15
+    "COLOR": "\033[94m",  # Bleu
+    "EMOJI": "🎯"
+}# --- STRATÉGIE M1 "L'HYPER-SCALPER" ---
 M1_SCALPER_CONFIG = {
-    "ENABLED": True,
+    "ENABLED": False,  # Désactivé au profit d'ICT Silver Bullet
     "NAME": "Hyper-Scalper M1",
     "MAGIC_NUMBER": 1001,
     "TIMEFRAME": "M1",
@@ -63,6 +76,69 @@ M1_SCALPER_CONFIG = {
     "VOLUME": 0.01,  # Volume spécifique pour M1 (plus petit)
     "COLOR": "\033[91m",  # Rouge
     "EMOJI": "🚀"
+}
+
+# --- STRATÉGIE ICT SILVER BULLET 🏅 GAGNANTE ---
+ICT_SILVER_BULLET_M5_CONFIG = {
+    "ENABLED": True,
+    "NAME": "ICT Silver Bullet M5 🏆",
+    "MAGIC_NUMBER": 20250813,
+    "TIMEFRAME": "M5",
+    "SYMBOL": "XAUUSD",
+    "CONFIDENCE_THRESHOLD": 0.60,
+    "FVG_MIN_PIPS": 3.0,
+    "LOOKBACK_PERIOD": 15,
+    "MAX_DAILY_TRADES": 5,
+    "PREFERRED_SESSIONS": ["london_session", "ny_am_session"],
+    "RISK_PER_TRADE": 0.02,  # 2%
+    "REWARD_RISK_RATIO": 2.0,
+    "STOP_LOSS_PIPS": 30,
+    "SCAN_INTERVAL": 30,  # 30 secondes
+    "VOLUME": 0.02,  # Volume optimisé
+    "COLOR": "\033[93m",  # Jaune/Or pour l'or
+    "EMOJI": "🏅"
+}
+
+# --- STRATÉGIE ICT SILVER BULLET M1 (BACKUP) ---
+ICT_SILVER_BULLET_M1_CONFIG = {
+    "ENABLED": False,  # Activable si besoin
+    "NAME": "ICT Silver Bullet M1",
+    "MAGIC_NUMBER": 20250814,
+    "TIMEFRAME": "M1",
+    "SYMBOL": "XAUUSD", 
+    "CONFIDENCE_THRESHOLD": 0.70,
+    "FVG_MIN_PIPS": 3.5,
+    "LOOKBACK_PERIOD": 20,
+    "MAX_DAILY_TRADES": 3,
+    "PREFERRED_SESSIONS": ["london_session", "ny_am_session"],
+    "RISK_PER_TRADE": 0.02,
+    "REWARD_RISK_RATIO": 2.0,
+    "STOP_LOSS_PIPS": 30,
+    "SCAN_INTERVAL": 10,  # 10 secondes
+    "VOLUME": 0.015,
+    "COLOR": "\033[93m",  # Jaune/Or
+    "EMOJI": "🥈"
+}
+
+# --- STRATÉGIE ICT SILVER BULLET M15 (BACKUP) ---
+ICT_SILVER_BULLET_M15_CONFIG = {
+    "ENABLED": False,  # Activable si besoin
+    "NAME": "ICT Silver Bullet M15",
+    "MAGIC_NUMBER": 20250815,
+    "TIMEFRAME": "M15",
+    "SYMBOL": "XAUUSD",
+    "CONFIDENCE_THRESHOLD": 0.70,
+    "FVG_MIN_PIPS": 4.0,
+    "LOOKBACK_PERIOD": 12,
+    "MAX_DAILY_TRADES": 2,
+    "PREFERRED_SESSIONS": ["london_session"],
+    "RISK_PER_TRADE": 0.02,
+    "REWARD_RISK_RATIO": 2.0,
+    "STOP_LOSS_PIPS": 30,
+    "SCAN_INTERVAL": 60,  # 1 minute
+    "VOLUME": 0.025,
+    "COLOR": "\033[93m",  # Jaune/Or
+    "EMOJI": "🥉"
 }
 
 # --- CODES COULEURS POUR L'AFFICHAGE ---
@@ -86,5 +162,13 @@ if M5_COMMANDO_CONFIG["ENABLED"]:
     ACTIVE_STRATEGIES.append(("M5", M5_COMMANDO_CONFIG))
 if M1_SCALPER_CONFIG["ENABLED"]:
     ACTIVE_STRATEGIES.append(("M1", M1_SCALPER_CONFIG))
+
+# --- ICT SILVER BULLET STRATEGIES 🏅 ---
+if ICT_SILVER_BULLET_M5_CONFIG["ENABLED"]:
+    ACTIVE_STRATEGIES.append(("ICT_M5", ICT_SILVER_BULLET_M5_CONFIG))
+if ICT_SILVER_BULLET_M1_CONFIG["ENABLED"]:
+    ACTIVE_STRATEGIES.append(("ICT_M1", ICT_SILVER_BULLET_M1_CONFIG))
+if ICT_SILVER_BULLET_M15_CONFIG["ENABLED"]:
+    ACTIVE_STRATEGIES.append(("ICT_M15", ICT_SILVER_BULLET_M15_CONFIG))
 
 print(f"🎯 Configuration Bot Ultime chargée: {len(ACTIVE_STRATEGIES)} stratégies actives")
