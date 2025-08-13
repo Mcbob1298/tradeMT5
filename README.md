@@ -1,190 +1,98 @@
-# Bot de Scalping Ultra-Agressif XAUUSD
+# 🎯 TradeMT5 - Système de Trading Automatisé Professionnel
 
-⚠️ **ATTENTION - STRATÉGIE À TRÈS HAUT RISQUE** ⚠️
-
-Ce bot implémente une stratégie de scalping ultra-agressif sur l'or (XAUUSD) **SANS STOP LOSS**. Les pertes peuvent être illimitées et le compte peut être liquidé rapidement.
-
-## 🚨 Avertissements Critiques
-
-- **AUCUN STOP LOSS** : Ce bot ne place jamais de Stop Loss
-- **PERTES ILLIMITÉES POSSIBLES** : En cas de mouvement défavorable
-- **LIQUIDATION RAPIDE DU COMPTE** : Risque très élevé
-- **TESTEZ UNIQUEMENT SUR COMPTE DEMO** au début
-- **Vous êtes seul responsable** des conséquences financières
-
-## 📋 Prérequis
-
-1. **MetaTrader 5** installé et configuré
-2. **Python 3.7+** avec les packages :
-   - MetaTrader5
-   - pandas
-   - numpy
-3. **Compte de trading** avec accès API
-4. **Connexion stable** et faible latence
-
-## 🚀 Installation
-
-1. Clonez ou téléchargez les fichiers dans un dossier
-2. Installez les dépendances Python :
-   ```bash
-   pip install MetaTrader5 pandas numpy
-   ```
-3. Configurez vos paramètres dans `config.py`
-
-## ⚙️ Configuration
-
-### Fichier `config.py`
-
-Modifiez les paramètres selon vos besoins :
-
-```python
-# Connexion MT5
-MT5_LOGIN = 5039037137
-MT5_PASSWORD = "-2YnWgJj"
-MT5_SERVER = "MetaQuotes-Demo"
-
-# Trading
-LOT_SIZE = 0.01  # Commencez très petit !
-TAKE_PROFIT_PIPS = 8  # Take Profit en pips
-```
-
-### Paramètres Critiques
-
-- **LOT_SIZE** : Commencez avec 0.01 lot maximum
-- **TAKE_PROFIT_PIPS** : Gains visés par trade (en pips)
-- **ANALYSIS_INTERVAL** : Fréquence d'analyse (secondes)
-
-## 🔧 Utilisation
-
-### 1. Test de Connexion (OBLIGATOIRE)
-
-Avant d'utiliser le bot, testez votre configuration :
-
-```bash
-python test_connection.py
-```
-
-Ce script vérifie :
-- ✅ Connexion à MT5
-- ✅ Accès au symbole XAUUSD
-- ✅ Données de marché disponibles
-- ✅ Permissions de trading
-
-### 2. Lancement du Bot
-
-Une fois les tests réussis :
-
-```bash
-python scalping_bot_xauusd.py
-```
-
-### 3. Arrêt du Bot
-
-Pour arrêter le bot proprement : `Ctrl + C`
-
-## 📊 Stratégie d'Analyse
-
-Le bot utilise une analyse multi-facteurs :
-
-### 1. Market Depth (Carnet d'ordres)
-- Analyse la pression acheteuse vs vendeuse
-- Poids : 30% dans la décision
-
-### 2. Volatilité des Ticks
-- Détecte l'accélération des prix
-- Poids : 40% dans la décision
-
-### 3. Moyenne Mobile Rapide
-- MA sur 5 périodes (M1)
-- Poids : 30% dans la décision
-
-### Conditions de Trade
-
-Un trade n'est ouvert que si :
-- ✅ Au moins 2 signaux sont concordants
-- ✅ Score composite > seuil de décision
-- ✅ Aucune position déjà ouverte
-
-## 🎯 Gestion des Trades
-
-### Entrée
-- **Type** : Ordre au marché (instantané)
-- **Volume** : Lot fixe (configurable)
-- **Take Profit** : TOUJOURS présent
-- **Stop Loss** : JAMAIS (volontairement omis)
-
-### Sortie
-- **Uniquement par Take Profit** : Le bot ne gère pas les trades après ouverture
-- **Fermeture automatique** : Déléguée au serveur MT5
-
-## 📁 Structure des Fichiers
+## 📁 Structure du Projet
 
 ```
 tradeMT5/
-├── scalping_bot_xauusd.py    # Bot principal
-├── config.py                 # Configuration
-├── test_connection.py        # Test de connexion
-└── README.md                 # Ce fichier
+├── bot_ultime/              # 🚀 Bot de trading principal
+│   ├── __init__.py
+│   ├── ultimate_bot.py      # Orchestrateur principal avec multi-threading
+│   ├── strategies/          # 📊 Stratégies de trading
+│   │   ├── __init__.py
+│   │   ├── strategy_m15.py  # Stratégie M15 (ADX: 25, RSI: 50/30)
+│   │   ├── strategy_m5.py   # Stratégie M5 (ADX: 24, RSI: 45/35) 
+│   │   └── strategy_m1.py   # Hyper-Scalper M1 (ADX: 15, RSI: 65/40)
+│   ├── config/              # ⚙️ Configuration
+│   │   ├── __init__.py
+│   │   └── config_ultimate.py
+│   └── core/                # 🔒 Modules centraux
+│       ├── __init__.py
+│       └── risk_manager.py  # Gestionnaire de risques global
+├── calibreurs/              # 🎛️ Outils de calibration
+│   ├── sniper_auto_calibrator.py    # Calibreur M15
+│   ├── sniper_auto_calibrator_M5.py # Calibreur M5
+│   └── hyper_scalper_M1.py          # Calibreur M1
+├── data/                    # 📈 Données de marché
+│   ├── XAUUSD_M1.csv
+│   ├── XAUUSD_M5.csv
+│   └── XAUUSD_M15.csv
+├── tests/                   # 🧪 Tests
+│   └── test_ultimate_bot.py
+├── docs/                    # 📚 Documentation
+│   └── README_BOT_ULTIME.md
+└── legacy/                  # 📦 Anciens fichiers
+    ├── config.py
+    └── README.md
 ```
 
-## 🔍 Logs et Monitoring
+## 🚀 Démarrage Rapide
 
-Le bot affiche en temps réel :
-- 🤖 État de fonctionnement
-- 🔍 Signaux détectés
-- 📊 Positions ouvertes
-- ✅ Trades exécutés
-- ❌ Erreurs rencontrées
+### Lancement du Bot Ultime (Multi-Stratégies)
+```bash
+cd bot_ultime
+python ultimate_bot.py
+```
 
-## ⚠️ Gestion des Risques
+### Calibration des Stratégies
+```bash
+# Calibration M15
+python calibreurs/sniper_auto_calibrator.py
 
-### Mesures de Sécurité Recommandées
+# Calibration M5  
+python calibreurs/sniper_auto_calibrator_M5.py
 
-1. **COMPTE DEMO UNIQUEMENT** au début
-2. **Capital limite** : Argent que vous pouvez perdre entièrement
-3. **Surveillance constante** : Ne laissez jamais le bot sans surveillance
-4. **Arrêt d'urgence** : Préparez un plan de fermeture manuelle
-5. **Taille de lot minimale** : Commencez très petit
+# Calibration M1
+python calibreurs/hyper_scalper_M1.py
+```
 
-### Conditions de Marché Défavorables
+## 🎯 Performance des Stratégies
 
-Le bot peut être inefficace ou dangereux lors :
-- 📰 **Annonces économiques importantes**
-- 🌍 **Événements géopolitiques majeurs**
-- 💥 **Volatilité extrême du marché**
-- 🕐 **Heures de fermeture des marchés**
-- 📡 **Problèmes de connexion/latence**
+| Timeframe | Profit Total | ADX Optimal | RSI Optimal |
+|-----------|-------------|-------------|-------------|
+| **M15**   | 18,423$     | 25          | 50/30       |
+| **M5**    | 15,287$     | 24          | 45/35       |
+| **M1**    | 12,995$     | 15          | 65/40       |
 
-## 🛠️ Dépannage
+## ⚡ Fonctionnalités
 
-### Problèmes Courants
+- ✅ **Multi-Threading**: Exécution simultanée des 3 stratégies
+- ✅ **Gestion des Risques**: Limite quotidienne, stop d'urgence  
+- ✅ **Filtre ADX**: Détection des tendances fortes
+- ✅ **Divergences RSI**: Signaux de retournement
+- ✅ **Interface en Temps Réel**: Monitoring complet
+- ✅ **Architecture Professionnelle**: Code modulaire et maintenable
 
-1. **Erreur de connexion MT5**
-   - Vérifiez que MT5 est ouvert
-   - Contrôlez les identifiants dans `config.py`
-   - Testez avec `test_connection.py`
+## 🔧 Configuration
 
-2. **Symbole XAUUSD non trouvé**
-   - Activez XAUUSD dans MT5
-   - Vérifiez auprès de votre broker
+La configuration se trouve dans `bot_ultime/config/config_ultimate.py`:
+- Paramètres MT5 (compte, serveur)
+- Limites de risque (3000$ max par jour)
+- Paramètres optimisés pour chaque timeframe
 
-3. **Ordres refusés**
-   - Vérifiez les permissions de trading
-   - Contrôlez la taille de lot minimum
-   - Vérifiez la marge disponible
+## 📊 Monitoring
 
-## 📞 Support
+Le bot affiche en temps réel:
+- Status de chaque stratégie
+- P&L total et par stratégie  
+- Nombre de positions ouvertes
+- Alertes de sécurité
 
-En cas de problème technique :
-1. Consultez les logs d'erreur
-2. Vérifiez votre configuration
-3. Testez avec `test_connection.py`
-4. Contactez votre broker si nécessaire
+## 🔒 Sécurité
+
+- **Risk Manager Global**: Contrôle centralisé des risques
+- **Threading Safety**: Verrous pour éviter les conflits
+- **Limits Strictes**: Arrêt automatique en cas de perte excessive
+- **Validation**: Tous les ordres sont validés avant exécution
 
 ---
-
-## ⚖️ Disclaimer Legal
-
-**L'utilisateur assume l'entière responsabilité** de l'utilisation de ce bot. Aucune garantie de performance n'est fournie. Le trading automatisé peut entraîner des pertes importantes et rapides.
-
-**Utilisez à vos propres risques.**
+*Système développé avec MetaTrader 5 API et optimisé sur données historiques XAUUSD*
