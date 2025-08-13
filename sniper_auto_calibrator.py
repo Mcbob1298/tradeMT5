@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-SNIPER BOT CALIBREUR - Version Auto-Optimization
+SNIPER BOT CALIBREUR - Version Auto-Optimization avec Filtre ADX
 Test automatique de différents seuils de divergence pour trouver le sweet spot
+NOUVELLE FONCTIONNALITÉ: Filtre ADX pour éviter les marchés en range
 Objectif: 1-2 trades par heure avec facteur de profit > 1.10
 """
 
@@ -22,7 +23,8 @@ EMA_PERIOD_SHORT = 20
 RSI_PERIOD = 14                         
 LOOKBACK_PERIOD = 50                    
 SWING_PERIOD = 7                        
-ATR_PERIOD = 14                         
+ATR_PERIOD = 14
+ADX_PERIOD = 14                         # Période pour l'ADX (force de tendance)                         
 
 # =============================================================================
 # PARAMÈTRES DE CALIBRAGE AUTOMATIQUE
@@ -31,8 +33,12 @@ ATR_PERIOD = 14
 DIVERGENCE_TEST_RANGE = [4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0]
 TARGET_TRADES_PER_YEAR = [50, 100]      # Objectif: 50-100 trades/an
 MIN_PROFIT_FACTOR = 1.10                # Facteur de profit minimum acceptable
+
+# Filtre ADX - Régime de marché
+MIN_ADX_TRENDING = 25.0                 # ADX minimum pour marché en tendance forte
+MAX_ADX_RANGE = 20.0                    # ADX maximum pour marché en range (à éviter)
 CSV_FILE = "XAUUSD_M15.csv"
-INITIAL_BALANCE = 10000.0
+INITIAL_BALANCE = 300.0
 
 # Configuration du logging
 logging.basicConfig(
@@ -59,6 +65,51 @@ def load_data():
         logging.error(f"❌ Erreur chargement données: {e}")
         return None
 
+def calculate_adx(df):
+    """
+    Calcule l'ADX (Average Directional Index) pour mesurer la force de tendance
+    ADX > 25: Marché en tendance forte (TRADER)
+    ADX < 20: Marché en range (ÉVITER)
+    """
+    # Calcul des mouvements directionnels
+    df['high_diff'] = df['high'].diff()
+    df['low_diff'] = df['low'].diff()
+    
+    # Plus DM et Moins DM
+    df['plus_dm'] = np.where((df['high_diff'] > df['low_diff']) & (df['high_diff'] > 0), df['high_diff'], 0)
+    df['minus_dm'] = np.where((df['low_diff'] > df['high_diff']) & (df['low_diff'] > 0), df['low_diff'], 0)
+    
+    # True Range (déjà calculé dans ATR, mais on le recalcule pour la cohérence)
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    
+    # Moyennes mobiles exponentielles
+    alpha = 1.0 / ADX_PERIOD
+    
+    # ATR lissé
+    df['atr_smooth'] = true_range.ewm(alpha=alpha, adjust=False).mean()
+    
+    # Plus DI et Minus DI
+    plus_dm_smooth = df['plus_dm'].ewm(alpha=alpha, adjust=False).mean()
+    minus_dm_smooth = df['minus_dm'].ewm(alpha=alpha, adjust=False).mean()
+    
+    df['plus_di'] = 100 * (plus_dm_smooth / df['atr_smooth'])
+    df['minus_di'] = 100 * (minus_dm_smooth / df['atr_smooth'])
+    
+    # DX (Directional Movement Index)
+    df['dx'] = 100 * np.abs(df['plus_di'] - df['minus_di']) / (df['plus_di'] + df['minus_di'])
+    df['dx'] = df['dx'].fillna(0)
+    
+    # ADX (moyenne mobile de DX)
+    df['adx'] = df['dx'].ewm(alpha=alpha, adjust=False).mean()
+    
+    # Nettoyer les colonnes temporaires
+    df.drop(['high_diff', 'low_diff', 'plus_dm', 'minus_dm', 'atr_smooth'], axis=1, inplace=True)
+    
+    return df
+
 def calculate_indicators(df):
     """Calcule tous les indicateurs techniques"""
     try:
@@ -81,6 +132,9 @@ def calculate_indicators(df):
         ranges = pd.concat([high_low, high_close, low_close], axis=1)
         true_range = ranges.max(axis=1)
         df['atr'] = true_range.rolling(window=ATR_PERIOD).mean()
+        
+        # ADX - Indicateur de force de tendance
+        df = calculate_adx(df)
         
         # Swing points
         df = detect_swing_points(df)
@@ -108,7 +162,13 @@ def detect_swing_points(df):
     return df
 
 def analyze_bullish_divergence(df_window, current_idx, min_divergence_strength):
-    """Analyse pour divergence haussière avec seuil configurable"""
+    """Analyse pour divergence haussière avec seuil configurable + filtre ADX"""
+    
+    # FILTRE ADX - Première vérification critique
+    current_adx = df_window['adx'].iloc[-1]
+    if pd.isna(current_adx) or current_adx < MIN_ADX_TRENDING:
+        return None  # Marché sans tendance suffisante - IGNORER le signal
+    
     swing_lows_mask = df_window['swing_low'].notna()
     swing_lows = df_window[swing_lows_mask].tail(3)
     
@@ -154,13 +214,20 @@ def analyze_bullish_divergence(df_window, current_idx, min_divergence_strength):
                 'reward_distance': final_reward,
                 'rr_ratio': final_rr_ratio,
                 'strength': rsi_divergence,
-                'entry_time': df_window.index[-1]
+                'entry_time': df_window.index[-1],
+                'adx': current_adx  # Force de tendance au moment du trade
             }
     
     return None
 
 def analyze_bearish_divergence(df_window, current_idx, min_divergence_strength):
-    """Analyse pour divergence baissière avec seuil configurable"""
+    """Analyse pour divergence baissière avec seuil configurable + filtre ADX"""
+    
+    # FILTRE ADX - Première vérification critique
+    current_adx = df_window['adx'].iloc[-1]
+    if pd.isna(current_adx) or current_adx < MIN_ADX_TRENDING:
+        return None  # Marché sans tendance suffisante - IGNORER le signal
+    
     swing_highs_mask = df_window['swing_high'].notna()
     swing_highs = df_window[swing_highs_mask].tail(3)
     
@@ -206,7 +273,8 @@ def analyze_bearish_divergence(df_window, current_idx, min_divergence_strength):
                 'reward_distance': final_reward,
                 'rr_ratio': final_rr_ratio,
                 'strength': rsi_divergence,
-                'entry_time': df_window.index[-1]
+                'entry_time': df_window.index[-1],
+                'adx': current_adx  # Force de tendance au moment du trade
             }
     
     return None
@@ -297,7 +365,8 @@ def run_single_backtest(df, min_divergence_strength, start_date=None, end_date=N
                     'exit_reason': exit_reason,
                     'strength': position_entry['strength'],
                     'rr_ratio': position_entry['rr_ratio'],
-                    'duration_bars': i - position_entry['entry_index']
+                    'duration_bars': i - position_entry['entry_index'],
+                    'adx': position_entry.get('adx', 0)  # Force de tendance
                 }
                 trades.append(trade_result)
                 current_balance += profit_dollars
@@ -310,7 +379,7 @@ def run_single_backtest(df, min_divergence_strength, start_date=None, end_date=N
 def analyze_calibration_results(results):
     """Analyse les résultats de calibrage pour trouver le sweet spot"""
     logging.info("=" * 80)
-    logging.info("📊 RÉSULTATS DU CALIBRAGE AUTOMATIQUE")
+    logging.info("📊 RÉSULTATS DU CALIBRAGE AUTOMATIQUE (AVEC FILTRE ADX)")
     logging.info("=" * 80)
     
     best_config = None
@@ -381,9 +450,10 @@ def analyze_calibration_results(results):
 
 def run_auto_calibration(df):
     """Lance le calibrage automatique sur TOUTE la période disponible"""
-    logging.info("🎯 DÉMARRAGE DU CALIBRAGE AUTOMATIQUE")
+    logging.info("🎯 DÉMARRAGE DU CALIBRAGE AUTOMATIQUE (AVEC FILTRE ADX)")
     logging.info(f"🔧 Test de {len(DIVERGENCE_TEST_RANGE)} configurations de divergence")
     logging.info(f"📊 Plage testée: {min(DIVERGENCE_TEST_RANGE)} → {max(DIVERGENCE_TEST_RANGE)}")
+    logging.info(f"🌊 Filtre ADX: Minimum {MIN_ADX_TRENDING} pour trader (évite marchés en range)")
     
     # Test sur TOUTE la période disponible pour maximum de données
     start_date = None  # Début du CSV
@@ -417,8 +487,9 @@ def run_auto_calibration(df):
 
 def main():
     """Fonction principale du calibreur automatique"""
-    print("🎯 SNIPER BOT CALIBREUR AUTOMATIQUE")
+    print("🎯 SNIPER BOT CALIBREUR AUTOMATIQUE v2.0 (AVEC FILTRE ADX)")
     print("Objectif: Trouver le sweet spot qualité/quantité optimal")
+    print("✨ NOUVEAU: Filtre ADX pour éviter les marchés sans tendance")
     print("=" * 60)
     
     df = load_data()
