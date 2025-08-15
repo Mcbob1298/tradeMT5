@@ -258,6 +258,47 @@ class UltraScalpingBot:
             safe_log(f"❌ Impossible d'activer {self.symbol}")
             return False
     
+    def calculate_adaptive_lot_size(self):
+        """Calcule la taille du lot adaptée à la balance du compte"""
+        try:
+            account_info = mt5.account_info()
+            if not account_info:
+                safe_log("⚠️ Impossible de récupérer les infos compte, lot par défaut: 0.01")
+                return 0.01
+            
+            balance = account_info.balance
+            
+            # Logique adaptative basée sur la balance
+            if balance < 2000:
+                lot_size = 0.01
+            elif balance < 3000:
+                lot_size = 0.02
+            elif balance < 4000:
+                lot_size = 0.03
+            elif balance < 5000:
+                lot_size = 0.04
+            elif balance < 6000:
+                lot_size = 0.05
+            elif balance < 7000:
+                lot_size = 0.06
+            elif balance < 8000:
+                lot_size = 0.07
+            elif balance < 9000:
+                lot_size = 0.08
+            elif balance < 10000:
+                lot_size = 0.09
+            else:
+                # Pour les balances > 10000, on continue la progression par tranches de 1000
+                tranche = int(balance / 1000)
+                lot_size = min(tranche * 0.01, 500)  # Maximum 500 lots pour la sécurité
+
+            safe_log(f"💰 Balance: ${balance:.2f} → Lot adaptatif: {lot_size}")
+            return lot_size
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur calcul lot adaptatif: {e}")
+            return 0.01  # Valeur par défaut en cas d'erreur
+    
     def place_real_order(self, trade_type, entry_price, tp_price, sl_price, signal):
         """Place un ordre réel sur MT5"""
         try:
@@ -269,8 +310,8 @@ class UltraScalpingBot:
             # Type d'ordre
             order_type = mt5.ORDER_TYPE_SELL if trade_type == "SELL" else mt5.ORDER_TYPE_BUY
             
-            # Volume (lot size)
-            volume = LOT_SIZE
+            # Volume (lot size adaptatif basé sur la balance)
+            volume = self.calculate_adaptive_lot_size()
             
             # Vérification du symbole
             symbol_info = mt5.symbol_info(self.symbol)
@@ -736,31 +777,30 @@ class UltraScalpingBot:
             
         return False
     
-    def detect_ultra_trend(self, df):
-        """Détection ultra rapide de tendance pour scalping"""
-        if len(df) < max(TREND_EMA_SLOW, RSI_PERIOD):
-            return "UNKNOWN", 0
+    def detect_ultra_trend(self, data):
+        """Détection ultra rapide de tendance pour scalping (sans pandas)"""
+        if len(data) < max(TREND_EMA_SLOW, RSI_PERIOD):
+            return "UNKNOWN", 0, {'ema_fast': 0, 'ema_slow': 0, 'rsi': 50, 'price': 0, 'ema_diff_pct': 0}
         
-        # EMAs ultra courtes
-        ema_fast = df['close'].ewm(span=TREND_EMA_FAST).mean()
-        ema_slow = df['close'].ewm(span=TREND_EMA_SLOW).mean()
+        # Extraction des prix de clôture
+        close_prices = [candle['close'] for candle in data]
         
-        # RSI ultra court
-        delta = df['close'].diff()
-        gain = delta.where(delta > 0, 0).rolling(window=RSI_PERIOD).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=RSI_PERIOD).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
+        # Calcul EMA rapide (méthode simple)
+        ema_fast = self.calculate_ema(close_prices, TREND_EMA_FAST)
+        ema_slow = self.calculate_ema(close_prices, TREND_EMA_SLOW)
+        
+        # Calcul RSI simple
+        rsi = self.calculate_rsi(close_prices, RSI_PERIOD)
         
         # Valeurs actuelles
-        current_ema_fast = ema_fast.iloc[-1]
-        current_ema_slow = ema_slow.iloc[-1] 
-        current_rsi = rsi.iloc[-1]
-        current_price = df['close'].iloc[-1]
+        current_ema_fast = ema_fast[-1]
+        current_ema_slow = ema_slow[-1]
+        current_rsi = rsi[-1] if rsi else 50
+        current_price = close_prices[-1]
         
         # Détection ultra sensible
         ema_diff = current_ema_fast - current_ema_slow
-        ema_diff_pct = (ema_diff / current_price) * 100
+        ema_diff_pct = (ema_diff / current_price) * 100 if current_price != 0 else 0
         
         # Force de tendance (plus élevé = plus fort)
         strength = abs(ema_diff_pct) * 100
@@ -790,6 +830,51 @@ class UltraScalpingBot:
             'price': current_price,
             'ema_diff_pct': ema_diff_pct
         }
+    
+    def calculate_ema(self, prices, period):
+        """Calcule l'EMA sans pandas"""
+        if len(prices) < period:
+            return prices.copy()
+        
+        multiplier = 2 / (period + 1)
+        ema = [prices[0]]  # Premier prix comme base
+        
+        for price in prices[1:]:
+            ema_value = (price * multiplier) + (ema[-1] * (1 - multiplier))
+            ema.append(ema_value)
+        
+        return ema
+    
+    def calculate_rsi(self, prices, period):
+        """Calcule le RSI sans pandas"""
+        if len(prices) < period + 1:
+            return [50] * len(prices)  # RSI neutre par défaut
+        
+        deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+        
+        gains = [delta if delta > 0 else 0 for delta in deltas]
+        losses = [-delta if delta < 0 else 0 for delta in deltas]
+        
+        # Moyenne simple pour les premiers points
+        avg_gain = sum(gains[:period]) / period
+        avg_loss = sum(losses[:period]) / period
+        
+        rsi_values = []
+        
+        for i in range(period, len(gains)):
+            if avg_loss == 0:
+                rsi_values.append(100)
+            else:
+                rs = avg_gain / avg_loss
+                rsi = 100 - (100 / (1 + rs))
+                rsi_values.append(rsi)
+            
+            # Mise à jour des moyennes (lissage)
+            avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+            avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        
+        # Compléter pour avoir la même longueur que les prix
+        return [50] * period + rsi_values
     
     def should_open_position(self, trend, strength, indicators):
         """Décide si on doit ouvrir une position contre-tendance"""
@@ -882,6 +967,10 @@ class UltraScalpingBot:
         # Simulation résultat (pour test)
         # Dans le vrai bot, on surveillerait les positions réelles
         # Simulation ultra rapide du résultat
+        
+        # Calcul du lot adaptatif pour la simulation
+        adaptive_lot = self.calculate_adaptive_lot_size()
+        
         trade_success = random.random() < 0.85  # 85% de réussite en simulation
         profit_pips = 0
         loss_pips = 0  
@@ -890,25 +979,25 @@ class UltraScalpingBot:
         
         if trade_success:
             profit_pips = TP_PIPS
-            profit_usd = profit_pips * LOT_SIZE * 1  # Approximation
+            profit_usd = profit_pips * adaptive_lot * 1  # Approximation avec lot adaptatif
             safe_log(f"✅ SCALP GAGNANT: +{profit_pips} pips = +${profit_usd:.2f}")
             self.stats['winning_trades'] += 1
         else:
             # Si pas de SL, on simule une petite perte (marché contre nous)
             if USE_STOP_LOSS:
                 loss_pips = -10
-                loss_usd = loss_pips * LOT_SIZE * 1
+                loss_usd = loss_pips * adaptive_lot * 1
                 safe_log(f"❌ Scalp perdant: {loss_pips} pips = ${loss_usd:.2f}")
             else:
                 # Sans SL, on simule que ça revient en notre faveur rapidement
                 if random.random() < 0.8:  # 80% de chance de récupération rapide
                     profit_pips = 1  # Petit profit à terme
-                    profit_usd = profit_pips * LOT_SIZE * 1
+                    profit_usd = profit_pips * adaptive_lot * 1
                     safe_log(f"🔄 Récupération: +{profit_pips} pip = +${profit_usd:.2f}")
                     self.stats['winning_trades'] += 1
                 else:
                     loss_pips = -5  # Perte modérée sans SL
-                    loss_usd = loss_pips * LOT_SIZE * 1
+                    loss_usd = loss_pips * adaptive_lot * 1
                     safe_log(f"⚠️ Position défavorable: {loss_pips} pips = ${loss_usd:.2f}")
         
         # Mise à jour statistiques
@@ -955,7 +1044,7 @@ class UltraScalpingBot:
         # Détection tendance ultra rapide
         trend, strength, indicators = self.detect_ultra_trend(df)
         
-        current_price = df['close'].iloc[-1]
+        current_price = indicators['price']  # Utilise le prix depuis les indicateurs
         
         # Affichage état marché (compact pour scalping)
         open_positions_count = len(self.open_positions)
