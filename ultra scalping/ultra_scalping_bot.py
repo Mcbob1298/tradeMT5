@@ -116,6 +116,10 @@ class UltraScalpingBot:
             'daily_limit_reached': False  # Flag pour limite journalière atteinte
         }
         
+        # Variables système profit quotidien adaptatif
+        self.daily_start_balance = 0  # Balance de départ du jour
+        self.daily_profit_target = 0  # Objectif de profit quotidien calculé automatiquement
+        
         # État des positions
         self.open_positions = []
         self.position_count = 0
@@ -132,6 +136,9 @@ class UltraScalpingBot:
         
         # Initialisation MT5
         self.initialize_mt5()
+        
+        # Initialisation du système de profit quotidien adaptatif
+        self.initialize_daily_profit_system()
         
         # Synchronisation des compteurs de positions avec MT5
         self.sync_position_counters_with_mt5()
@@ -298,6 +305,126 @@ class UltraScalpingBot:
         except Exception as e:
             safe_log(f"❌ Erreur calcul lot adaptatif: {e}")
             return 0.01  # Valeur par défaut en cas d'erreur
+    
+    def calculate_daily_profit_target(self, balance):
+        """Calcule l'objectif de profit quotidien basé sur la balance (10% par tranche de 1000€)"""
+        try:
+            # Calcul par tranches de 1000€ avec objectif de 10% (100€ par tranche de 1000€)
+            tranche = int(balance / 1000)  # Tranche de 1000€
+            
+            if tranche == 0:  # 0-999€
+                target = 100
+            else:  # 1000€+, 100€ par tranche de 1000€
+                target = tranche * 100
+            
+            safe_log(f"🎯 Balance: ${balance:.2f} → Objectif quotidien: {target}€ (tranche {tranche})")
+            return target
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur calcul objectif quotidien: {e}")
+            return 100  # Objectif par défaut
+    
+    def initialize_daily_profit_system(self):
+        """Initialise le système de profit quotidien au démarrage ou nouveau jour"""
+        try:
+            account_info = mt5.account_info()
+            if not account_info:
+                safe_log("⚠️ Impossible d'initialiser le système de profit quotidien")
+                return
+            
+            current_balance = account_info.balance
+            today = datetime.now().date()
+            
+            # Sauvegarde de la balance de départ du jour
+            self.daily_start_balance = current_balance
+            self.daily_profit_target = self.calculate_daily_profit_target(current_balance)
+            
+            # Reset des stats quotidiennes
+            self.stats['daily_start'] = today
+            self.stats['daily_profit'] = 0
+            self.stats['daily_limit_reached'] = False
+            
+            safe_log(f"🌅 SYSTÈME PROFIT QUOTIDIEN INITIALISÉ:")
+            safe_log(f"   📅 Date: {today.strftime('%d/%m/%Y')}")
+            safe_log(f"   💰 Balance de départ: {self.daily_start_balance:.2f}€")
+            safe_log(f"   🎯 Objectif quotidien: {self.daily_profit_target}€")
+            safe_log(f"   📊 Balance cible: {self.daily_start_balance + self.daily_profit_target:.2f}€")
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur initialisation système profit quotidien: {e}")
+    
+    def display_profit_status(self):
+        """Affiche le statut détaillé du profit toutes les 10 secondes"""
+        try:
+            # Calcul du profit en temps réel
+            current_profit = self.calculate_real_time_daily_profit()
+            
+            # Récupération de la balance actuelle
+            account_info = mt5.account_info()
+            if not account_info:
+                return
+            
+            current_balance = account_info.balance
+            target_balance = self.daily_start_balance + self.daily_profit_target
+            remaining_profit = self.daily_profit_target - current_profit
+            progress_pct = (current_profit / self.daily_profit_target * 100) if self.daily_profit_target > 0 else 0
+            
+            # Statut emoji basé sur le progrès
+            if progress_pct >= 100:
+                status_emoji = "🎯✅"  # Objectif atteint
+            elif progress_pct >= 75:
+                status_emoji = "🔥"    # Très proche
+            elif progress_pct >= 50:
+                status_emoji = "📈"    # Bon progrès
+            elif progress_pct >= 25:
+                status_emoji = "⚡"    # En cours
+            else:
+                status_emoji = "🌱"    # Démarrage
+            
+            safe_log(f"")
+            safe_log(f"{status_emoji} ═══ STATUT PROFIT QUOTIDIEN ═══")
+            safe_log(f"💰 Balance actuelle: {current_balance:.2f}€")
+            safe_log(f"🏁 Balance de départ: {self.daily_start_balance:.2f}€")
+            safe_log(f"🎯 Objectif du jour: {self.daily_profit_target}€")
+            safe_log(f"📊 Profit actuel: {current_profit:+.2f}€")
+            safe_log(f"📈 Progrès: {progress_pct:.1f}% ({current_profit:.0f}€/{self.daily_profit_target}€)")
+            safe_log(f"⏳ Restant à faire: {remaining_profit:+.2f}€")
+            safe_log(f"🎪 Balance cible: {target_balance:.2f}€")
+            safe_log(f"════════════════════════════════")
+            safe_log(f"")
+            
+        except Exception as e:
+            safe_log(f"⚠️ Erreur affichage statut profit: {e}")
+    
+    def calculate_real_time_daily_profit(self):
+        """Calcule le profit quotidien en temps réel basé sur la balance actuelle"""
+        try:
+            account_info = mt5.account_info()
+            if not account_info:
+                return 0
+            
+            current_balance = account_info.balance
+            
+            # Formule: (Balance de départ + Objectif) - Balance actuelle = Reste à gagner
+            # Donc: Objectif - Reste à gagner = Profit actuel
+            balance_target = self.daily_start_balance + self.daily_profit_target
+            remaining_to_earn = balance_target - current_balance
+            current_profit = self.daily_profit_target - remaining_to_earn
+            
+            # Debug pour comprendre le calcul
+            safe_log(f"🔍 Calcul profit temps réel:")
+            safe_log(f"   💰 Balance départ: {self.daily_start_balance:.2f}€")
+            safe_log(f"   🎯 Objectif: {self.daily_profit_target}€")
+            safe_log(f"   📊 Balance cible: {balance_target:.2f}€")
+            safe_log(f"   💳 Balance actuelle: {current_balance:.2f}€")
+            safe_log(f"   📈 Reste à gagner: {remaining_to_earn:.2f}€")
+            safe_log(f"   ✅ PROFIT ACTUEL: {current_profit:.2f}€/{self.daily_profit_target}€")
+            
+            return current_profit
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur calcul profit temps réel: {e}")
+            return 0
     
     def place_real_order(self, trade_type, entry_price, tp_price, sl_price, signal):
         """Place un ordre réel sur MT5"""
@@ -606,22 +733,17 @@ class UltraScalpingBot:
         
         # Reset si nouveau jour
         if self.stats['daily_start'] != today:
-            self.stats['daily_start'] = today
-            safe_log(f"🌅 Nouveau jour détecté - Reset du profit journalier")
-            
-            # Reset du profit journalier à 0€ (normal pour un nouveau jour)
-            self.stats['daily_profit'] = 0
-            self.bot_trades_profit = 0
-            
-            # Désactiver le profit manuel pour le nouveau jour (retour à l'auto)
-            if self.manual_daily_profit is not None:
-                safe_log(f"📊 Nouveau jour : reset profit manuel")
-                self.manual_daily_profit = None
+            safe_log(f"🌅 Nouveau jour détecté - Reinitialisation du système")
+            self.initialize_daily_profit_system()
         
-        # Vérification de la limite
-        if self.stats['daily_profit'] >= DAILY_PROFIT_LIMIT and not self.stats['daily_limit_reached']:
+        # Calcul du profit en temps réel
+        current_daily_profit = self.calculate_real_time_daily_profit()
+        self.stats['daily_profit'] = current_daily_profit
+        
+        # Vérification de la limite (objectif atteint)
+        if current_daily_profit >= self.daily_profit_target and not self.stats['daily_limit_reached']:
             self.stats['daily_limit_reached'] = True
-            safe_log(f"🎯 LIMITE JOURNALIÈRE ATTEINTE : {self.stats['daily_profit']:.2f}€/{DAILY_PROFIT_LIMIT}€")
+            safe_log(f"🎯 OBJECTIF QUOTIDIEN ATTEINT ! {current_daily_profit:.2f}€/{self.daily_profit_target}€")
             safe_log(f"⏸️ Arrêt des nouveaux trades - En attente que les positions ouvertes deviennent positives")
             return True
             
@@ -1046,9 +1168,12 @@ class UltraScalpingBot:
         
         current_price = indicators['price']  # Utilise le prix depuis les indicateurs
         
+        # Affichage détaillé du statut profit toutes les 10 secondes
+        self.display_profit_status()
+        
         # Affichage état marché (compact pour scalping)
         open_positions_count = len(self.open_positions)
-        daily_status = f"💰{self.stats['daily_profit']:.1f}€/{DAILY_PROFIT_LIMIT}€"
+        daily_status = f"💰{self.stats['daily_profit']:.1f}€/{self.daily_profit_target}€"
         if self.stats['daily_limit_reached']:
             daily_status += " ⏸️"
         safe_log(f"📊 ${current_price:.2f} | {trend} {strength:.3f}% | RSI:{indicators['rsi']:.1f} | SELL:{self.sell_positions_count}/5 | BUY:{self.buy_positions_count} | {daily_status}")
