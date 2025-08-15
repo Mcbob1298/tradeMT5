@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-ULTRA SCALPING BOT - STRATÉGIE CONTRE-TENDANCE EXTRÊME
+ULTRA SCALPING BOT - STRATÉGIE BUY UNIQUEMENT
 ====================================================
 
-🔥 BOT ULTRA AGRESSIF - SCALPING CONTRE-TENDANCE
-⚡ Logique: Detecte la direction et trade CONTRE
-📈 Hausse détectée → SELL (bet sur correction)
+🔥 BOT ULTRA AGRESSIF - SCALPING BUY UNIQUEMENT
+⚡ Logique: Detecte les baisses et achète sur rebonds
 📉 Baisse détectée → BUY (bet sur rebond)
+🚫 Plus de SELL - Seulement des achats
 
 ⚠️ ATTENTION: Stratégie très risquée!
 - TP minimal (quelques pips)
-- Aucun Stop Loss (SL = 0)
+- Aucun Stop Loss pour les BUY
 - Trading haute fréquence
 - Capital à risque uniquement!
 
@@ -41,8 +41,8 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 # CONFIGURATION ULTRA SCALPING
 # =============================================================================
 ENABLE_REAL_TRADING = True   # ✅ TRADING RÉEL ACTIVÉ sur compte démo
-MT5_LOGIN = 95541362       # Votre compte démo
-MT5_PASSWORD = "_2UgKhMi"    
+MT5_LOGIN = 95548488       # Votre compte démo
+MT5_PASSWORD = "-uCiJm3j"    
 MT5_SERVER = "MetaQuotes-Demo"
 
 # Paramètres ultra agressifs
@@ -76,8 +76,8 @@ def safe_log(message):
 
 class UltraScalpingBot:
     """
-    Bot de scalping ultra agressif contre-tendance
-    Stratégie: Fade les mouvements, bet sur les corrections
+    Bot de scalping ultra agressif - BUY uniquement
+    Stratégie: Achète sur les baisses, bet sur les rebonds
     """
     
     def __init__(self, config_name='YOLO', manual_daily_profit=None):
@@ -573,41 +573,7 @@ class UltraScalpingBot:
             safe_log(f"   🔍 Détails: {traceback.format_exc()}")
             return False
     
-    def check_and_close_old_positions(self):
-        """Vérifie et ferme les positions ouvertes depuis plus de 30 minutes"""
-        if not self.open_positions:
-            return
-        
-        # D'abord, synchronisation avec MT5 pour supprimer les positions déjà fermées
-        self.sync_positions_with_mt5()
-        
-        current_time = datetime.now()
-        positions_to_remove = []
-        
-        for i, position in enumerate(self.open_positions):
-            open_duration = current_time - position['open_time']
-            
-            # Si la position est ouverte depuis plus de 30 minutes
-            if open_duration.total_seconds() > 30 * 60:  # 30 minutes en secondes
-                ticket = position['ticket']
-                
-                # Tentative de fermeture de la position
-                success = self.close_position_by_ticket(ticket)
-                
-                if success:
-                    duration_str = str(open_duration).split('.')[0]  # Format HH:MM:SS
-                    safe_log(f"🔒 POSITION FERMÉE (timeout 30min)")
-                    safe_log(f"   📋 Ticket: {ticket}")
-                    safe_log(f"   ⏰ Durée: {duration_str}")
-                    safe_log(f"   💰 Prix ouverture: {position['open_price']}")
-                    
-                    positions_to_remove.append(i)
-                else:
-                    safe_log(f"❌ Échec fermeture position {ticket}")
-        
-        # Suppression des positions fermées de la liste (en ordre inverse pour éviter les décalages d'index)
-        for i in reversed(positions_to_remove):
-            self.open_positions.pop(i)
+    # Fonction de fermeture automatique désactivée pour préserver les profits
     
     def sync_positions_with_mt5(self):
         """Synchronise notre liste avec les positions réelles de MT5"""
@@ -999,7 +965,7 @@ class UltraScalpingBot:
         return [50] * period + rsi_values
     
     def should_open_position(self, trend, strength, indicators):
-        """Décide si on doit ouvrir une position contre-tendance"""
+        """Décide si on doit ouvrir une position BUY"""
         
         # Vérification limite journalière de profit
         if self.stats['daily_limit_reached']:
@@ -1015,26 +981,11 @@ class UltraScalpingBot:
         
         current_rsi = indicators['rsi']
         
-        # LOGIQUE CONTRE-TENDANCE:
-        # Si marché BULLISH (hausse) → SELL (bet sur correction)
+        # LOGIQUE BUY UNIQUEMENT:
         # Si marché BEARISH (baisse) → BUY (bet sur rebond)
+        # Plus de SELL - Seulement des achats
         
-        if trend == "BULLISH" and strength > 0.015:  # Hausse forte
-            # Vérification limite spécifique pour SELL (5 max)
-            if self.sell_positions_count >= 5:
-                return None
-                
-            # Conditions pour VENDRE (contre la hausse)
-            if current_rsi > self.config['RSI_OVERBOUGHT']:  # RSI selon config
-                return {
-                    'type': 'SELL',
-                    'reason': 'FADE_BULLISH_TREND',
-                    'strength': strength,
-                    'rsi': current_rsi,
-                    'confidence': min(strength * 50, 0.9)
-                }
-        
-        elif trend == "BEARISH" and strength > 0.015:  # Baisse forte
+        if trend == "BEARISH" and strength > 0.015:  # Baisse forte
             # Conditions pour ACHETER (contre la baisse)
             if current_rsi < self.config['RSI_OVERSOLD']:  # RSI selon config
                 return {
@@ -1066,7 +1017,7 @@ class UltraScalpingBot:
         else:  # SELL
             entry_price = tick_info.bid  # Prix de vente réel
             tp_price = entry_price - (TP_PIPS * 0.01)  # TP à -TP_PIPS pips 
-            sl_price = entry_price + (TP_PIPS * 10 * 0.01) if USE_STOP_LOSS else None  # SL à 10x TP pour SELL
+            sl_price = entry_price + (TP_PIPS * 2 * 0.01) if USE_STOP_LOSS else None  # SL à 2x TP pour SELL seulement
         
         # Log du signal
         safe_log(f"⚡ ULTRA SCALP {trade_type} - {signal['reason']}")
@@ -1140,9 +1091,6 @@ class UltraScalpingBot:
     def run_ultra_scalping_cycle(self):
         """Exécute un cycle d'ultra scalping"""
         
-        # Vérification et fermeture des positions anciennes (>30min)
-        self.check_and_close_old_positions()
-        
         # Synchronisation avec MT5 (positions fermées par TP)
         self.sync_positions_with_mt5()
         
@@ -1176,13 +1124,13 @@ class UltraScalpingBot:
         daily_status = f"💰{self.stats['daily_profit']:.1f}€/{self.daily_profit_target}€"
         if self.stats['daily_limit_reached']:
             daily_status += " ⏸️"
-        safe_log(f"📊 ${current_price:.2f} | {trend} {strength:.3f}% | RSI:{indicators['rsi']:.1f} | SELL:{self.sell_positions_count}/5 | BUY:{self.buy_positions_count} | {daily_status}")
+        safe_log(f"📊 ${current_price:.2f} | {trend} {strength:.3f}% | RSI:{indicators['rsi']:.1f} | BUY:{self.buy_positions_count} | {daily_status}")
         
-        # Vérification signal contre-tendance
+        # Vérification signal BUY
         signal = self.should_open_position(trend, strength, indicators)
         
         if signal:
-            safe_log(f"🔥 SIGNAL CONTRE-TENDANCE: {signal['type']} vs {trend}")
+            safe_log(f"🔥 SIGNAL BUY: {signal['type']} vs {trend}")
             self.execute_ultra_scalp_trade(signal, current_price)
         
         # Affichage stats rapides toutes les 10 trades
@@ -1206,9 +1154,10 @@ class UltraScalpingBot:
         """Lance une session d'ultra scalping"""
         safe_log(f"\n🔥 LANCEMENT ULTRA SCALPING SESSION")
         safe_log("="*60)
-        safe_log(f"⚡ Stratégie: CONTRE-TENDANCE EXTRÊME")
-        safe_log(f"📈 Hausse → SELL | 📉 Baisse → BUY")
-        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: {'AUCUN' if not USE_STOP_LOSS else '10 pips'}")
+        safe_log(f"⚡ Stratégie: BUY UNIQUEMENT")
+        safe_log(f"� Baisse → BUY (bet sur rebond)")
+        safe_log(f"🚫 Plus de SELL - Seulement des achats")
+        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: AUCUN")
         safe_log(f"⏱️ Durée: {duration_minutes} minutes")
         safe_log(f"🔄 Analyse: toutes les {ANALYSIS_INTERVAL} secondes")
         safe_log("")
@@ -1246,7 +1195,7 @@ class UltraScalpingBot:
         safe_log("="*60)
         safe_log(f"♾️ Session sans limite de temps")
         safe_log(f"⚡ Analyse toutes les {ANALYSIS_INTERVAL} secondes")
-        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: {'AUCUN' if not USE_STOP_LOSS else '10 pips'}")
+        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: AUCUN")
         safe_log(f"⏹️ Arrêt: Ctrl+C")
         
         self.is_trading = True
@@ -1275,7 +1224,7 @@ class UltraScalpingBot:
     def generate_ultra_report(self):
         """Génère le rapport final ultra scalping"""
         safe_log(f"\n" + "="*70)
-        safe_log("🔥 RAPPORT FINAL - ULTRA SCALPING CONTRE-TENDANCE")
+        safe_log("🔥 RAPPORT FINAL - ULTRA SCALPING BUY UNIQUEMENT")
         safe_log("="*70)
         
         if self.stats['total_trades'] == 0:
@@ -1320,12 +1269,12 @@ class UltraScalpingBot:
 
 def main():
     """Fonction principale Ultra Scalping"""
-    safe_log("🔥 ULTRA SCALPING BOT - CONTRE-TENDANCE EXTRÊME")
+    safe_log("🔥 ULTRA SCALPING BOT - BUY UNIQUEMENT")
     safe_log("="*60)
-    safe_log("⚡ Stratégie: Fade les tendances, bet sur corrections")
-    safe_log("📈 Hausse détectée → SELL")
-    safe_log("📉 Baisse détectée → BUY") 
-    safe_log(f"🎯 TP: {TP_PIPS} pips | SL: {'AUCUN' if not USE_STOP_LOSS else '10 pips'}")
+    safe_log("⚡ Stratégie: Achats sur rebonds uniquement")
+    safe_log("� Baisse détectée → BUY (bet sur rebond)") 
+    safe_log("� Plus de SELL - Seulement des achats")
+    safe_log(f"🎯 TP: {TP_PIPS} pips | SL: AUCUN (BUY seulement)")
     
     if ENABLE_REAL_TRADING:
         safe_log("⚠️ ATTENTION: TRADING RÉEL ACTIVÉ!")
