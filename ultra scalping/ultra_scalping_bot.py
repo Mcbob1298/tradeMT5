@@ -41,8 +41,8 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 # CONFIGURATION ULTRA SCALPING
 # =============================================================================
 ENABLE_REAL_TRADING = True   # ✅ TRADING RÉEL ACTIVÉ sur compte démo
-MT5_LOGIN = 95539860       # Votre compte démo
-MT5_PASSWORD = "WmQ-R5Nh"    
+MT5_LOGIN = 95541362       # Votre compte démo
+MT5_PASSWORD = "_2UgKhMi"    
 MT5_SERVER = "MetaQuotes-Demo"
 
 # Paramètres ultra agressifs
