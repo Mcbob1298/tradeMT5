@@ -628,7 +628,7 @@ class UltraScalpingBot:
         pour qu'au pire, elle se termine à zéro.
         
         Comment ça marche :
-        - Dès que le trade atteint +20 pips (juste avant TP de 23 pips)
+        - Dès que le trade atteint +15 pips (analyse TOUTES LES SECONDES)
         - On déplace automatiquement le SL initial vers le prix d'entrée
         - Scénario 1 (Idéal): Prix continue → TP à 23 pips
         - Scénario 2 (Reversal): Prix se retourne → SL à 0€ au lieu de -30€
@@ -664,8 +664,8 @@ class UltraScalpingBot:
             if position_type == 'BUY':
                 current_profit_pips = (current_price.bid - entry_price) / 0.01  # Profit en pips
                 
-                # Seuil de verrouillage : +20 pips (juste avant TP de 23 pips)
-                if current_profit_pips >= 20.0:
+                # Seuil de verrouillage : +15 pips (breakeven plus agressif)
+                if current_profit_pips >= 15.0:
                     
                     # Vérification si le SL n'est pas déjà au breakeven
                     if mt5_position.sl < entry_price - 0.1:  # SL encore loin du prix d'entrée
@@ -1163,13 +1163,7 @@ class UltraScalpingBot:
         return True
     
     def run_ultra_scalping_cycle(self):
-        """Exécute un cycle d'ultra scalping"""
-        
-        # Synchronisation avec MT5 (positions fermées par TP)
-        self.sync_positions_with_mt5()
-        
-        # 🔒 VERROUILLAGE DES GAINS - Déplacement SL à breakeven
-        self.check_and_move_sl_to_breakeven()
+        """Exécute un cycle d'analyse du marché (toutes les 10 secondes)"""
         
         # Vérification de la limite journalière de profit
         daily_limit_reached = self.check_daily_profit_limit()
@@ -1277,18 +1271,29 @@ class UltraScalpingBot:
         
         self.is_trading = True
         cycle_count = 0
+        last_market_analysis = 0  # Compteur pour l'analyse du marché
         
         try:
             while self.is_trading:
                 cycle_count += 1
                 
-                # Affichage progression toutes les 100 cycles
-                if cycle_count % 100 == 1:
-                    elapsed = datetime.now() - self.stats['start_time']
-                    safe_log(f"\n🔥 CYCLE {cycle_count} - Temps: {elapsed}")
+                # 🔒 ANALYSE BREAKEVEN - Toutes les secondes (priorité max)
+                self.sync_positions_with_mt5()
+                self.check_and_move_sl_to_breakeven()
                 
-                self.run_ultra_scalping_cycle()
-                time.sleep(ANALYSIS_INTERVAL)
+                # 📊 ANALYSE DU MARCHÉ - Toutes les 10 secondes seulement
+                if last_market_analysis >= ANALYSIS_INTERVAL:
+                    # Affichage progression toutes les 100 analyses de marché
+                    if (cycle_count // ANALYSIS_INTERVAL) % 100 == 1:
+                        elapsed = datetime.now() - self.stats['start_time']
+                        safe_log(f"\n🔥 ANALYSE MARCHÉ {cycle_count // ANALYSIS_INTERVAL} - Temps: {elapsed}")
+                    
+                    self.run_ultra_scalping_cycle()
+                    last_market_analysis = 0  # Reset compteur
+                else:
+                    last_market_analysis += 1
+                
+                time.sleep(1)  # Analyse breakeven toutes les secondes
                 
         except KeyboardInterrupt:
             elapsed = datetime.now() - self.stats['start_time']
