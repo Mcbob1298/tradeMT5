@@ -10,7 +10,7 @@ ULTRA SCALPING BOT - STRATÉGIE BUY UNIQUEMENT
 
 ⚠️ ATTENTION: Stratégie très risquée!
 - TP minimal (quelques pips)
-- Aucun Stop Loss pour les BUY
+- Stop Loss BUY: 1170 points
 - Trading haute fréquence
 - Capital à risque uniquement!
 
@@ -1013,7 +1013,7 @@ class UltraScalpingBot:
         if trade_type == 'BUY':
             entry_price = tick_info.ask  # Prix d'achat réel
             tp_price = entry_price + (TP_PIPS * 0.01)  # TP à +TP_PIPS pips
-            sl_price = None  # Pas de SL pour les BUY
+            sl_price = entry_price - (1170 * 0.01)  # SL à -1170 points pour les BUY
         else:  # SELL
             entry_price = tick_info.bid  # Prix de vente réel
             tp_price = entry_price - (TP_PIPS * 0.01)  # TP à -TP_PIPS pips 
