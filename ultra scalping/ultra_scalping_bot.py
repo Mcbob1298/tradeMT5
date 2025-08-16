@@ -618,6 +618,80 @@ class UltraScalpingBot:
         for i in reversed(positions_to_remove):
             self.open_positions.pop(i)
     
+    def check_and_move_sl_to_breakeven(self):
+        """
+        🔒 VERROUILLAGE DES GAINS - Stop Loss à Breakeven
+        ================================================
+        
+        Le Principe : Un trade gagnant ne doit jamais se transformer en trade perdant.
+        Une fois qu'un certain niveau de profit est atteint, on sécurise la position 
+        pour qu'au pire, elle se termine à zéro.
+        
+        Comment ça marche :
+        - Dès que le trade atteint +20 pips (juste avant TP de 23 pips)
+        - On déplace automatiquement le SL initial vers le prix d'entrée
+        - Scénario 1 (Idéal): Prix continue → TP à 23 pips
+        - Scénario 2 (Reversal): Prix se retourne → SL à 0€ au lieu de -30€
+        """
+        if not self.open_positions:
+            return
+        
+        # Récupération des positions ouvertes sur MT5
+        mt5_positions = mt5.positions_get(symbol=self.symbol)
+        if not mt5_positions:
+            return
+        
+        current_price = mt5.symbol_info_tick(self.symbol)
+        if not current_price:
+            return
+        
+        for position in self.open_positions:
+            ticket = position['ticket']
+            entry_price = position['open_price']
+            position_type = position['type']
+            
+            # Recherche de la position correspondante sur MT5
+            mt5_position = None
+            for mt5_pos in mt5_positions:
+                if mt5_pos.ticket == ticket:
+                    mt5_position = mt5_pos
+                    break
+            
+            if not mt5_position:
+                continue
+            
+            # Vérification si c'est un trade BUY
+            if position_type == 'BUY':
+                current_profit_pips = (current_price.bid - entry_price) / 0.01  # Profit en pips
+                
+                # Seuil de verrouillage : +20 pips (juste avant TP de 23 pips)
+                if current_profit_pips >= 20.0:
+                    
+                    # Vérification si le SL n'est pas déjà au breakeven
+                    if mt5_position.sl < entry_price - 0.1:  # SL encore loin du prix d'entrée
+                        
+                        # Déplacement du SL au prix d'entrée (breakeven)
+                        new_sl = entry_price
+                        
+                        # Modification de la position sur MT5
+                        request = {
+                            "action": mt5.TRADE_ACTION_SLTP,
+                            "symbol": self.symbol,
+                            "position": ticket,
+                            "sl": new_sl,
+                            "tp": mt5_position.tp,  # Garde le même TP
+                        }
+                        
+                        result = mt5.order_send(request)
+                        
+                        if result.retcode == mt5.TRADE_RETCODE_DONE:
+                            safe_log(f"🔒 GAINS VERROUILLÉS! Ticket {ticket}")
+                            safe_log(f"   💰 Profit actuel: +{current_profit_pips:.1f} pips")
+                            safe_log(f"   🛡️ SL déplacé au breakeven: ${new_sl:.2f}")
+                            safe_log(f"   ✅ Trade sécurisé: Perte max = 0€")
+                        else:
+                            safe_log(f"❌ Échec déplacement SL pour {ticket}: {result.comment}")
+    
     def close_position_by_ticket(self, ticket):
         """Ferme une position spécifique par son ticket"""
         try:
@@ -1093,6 +1167,9 @@ class UltraScalpingBot:
         
         # Synchronisation avec MT5 (positions fermées par TP)
         self.sync_positions_with_mt5()
+        
+        # 🔒 VERROUILLAGE DES GAINS - Déplacement SL à breakeven
+        self.check_and_move_sl_to_breakeven()
         
         # Vérification de la limite journalière de profit
         daily_limit_reached = self.check_daily_profit_limit()
