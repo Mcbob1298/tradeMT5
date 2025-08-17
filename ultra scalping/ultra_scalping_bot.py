@@ -1228,7 +1228,7 @@ class UltraScalpingBot:
         safe_log(f"⚡ Stratégie: BUY UNIQUEMENT")
         safe_log(f"� Baisse → BUY (bet sur rebond)")
         safe_log(f"🚫 Plus de SELL - Seulement des achats")
-        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: AUCUN")
+        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: -1170 points + Breakeven à +15 pips")
         safe_log(f"⏱️ Durée: {duration_minutes} minutes")
         safe_log(f"🔄 Analyse: toutes les {ANALYSIS_INTERVAL} secondes")
         safe_log("")
@@ -1266,7 +1266,7 @@ class UltraScalpingBot:
         safe_log("="*60)
         safe_log(f"♾️ Session sans limite de temps")
         safe_log(f"⚡ Analyse toutes les {ANALYSIS_INTERVAL} secondes")
-        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: AUCUN")
+        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: -1170 points + Breakeven à +15 pips")
         safe_log(f"⏹️ Arrêt: Ctrl+C")
         
         self.is_trading = True
@@ -1356,7 +1356,7 @@ def main():
     safe_log("⚡ Stratégie: Achats sur rebonds uniquement")
     safe_log("� Baisse détectée → BUY (bet sur rebond)") 
     safe_log("� Plus de SELL - Seulement des achats")
-    safe_log(f"🎯 TP: {TP_PIPS} pips | SL: AUCUN (BUY seulement)")
+    safe_log(f"🎯 TP: {TP_PIPS} pips | SL: -1170 points + Breakeven à +15 pips (BUY seulement)")
     
     if ENABLE_REAL_TRADING:
         safe_log("⚠️ ATTENTION: TRADING RÉEL ACTIVÉ!")
