@@ -41,18 +41,19 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 # CONFIGURATION ULTRA SCALPING
 # =============================================================================
 ENABLE_REAL_TRADING = True   # ✅ TRADING RÉEL ACTIVÉ sur compte démo
-MT5_LOGIN = 5039217323       # Votre compte démo
-MT5_PASSWORD = "@4EbQiNi"    
+MT5_LOGIN = 95621570       # Votre compte démo
+MT5_PASSWORD = "Q-Ke5cKw"    
 MT5_SERVER = "MetaQuotes-Demo"
 
 # Paramètres ultra agressifs
 SYMBOL = "XAUUSD"           # Or (très volatil = parfait pour scalping)
 TIMEFRAME = mt5.TIMEFRAME_M1  # 1 minute (ultra rapide)
 LOT_SIZE = 0.01             # Lot minimal pour commencer
-TP_PIPS = 23                 # Take Profit: 23 pips seulement!
-USE_STOP_LOSS = True        # Stop Loss activé pour les SELL
+TP_PIPS = 92                 # Take Profit: 92 pips (doublé pour sécurité)
+USE_STOP_LOSS = True        # Stop Loss activé pour BUY et SELL
 MAX_POSITIONS = 99999999999           # Maximum 5 positions simultanées
 ANALYSIS_INTERVAL = 10      # Analyse toutes les 10 secondes
+TRADE_FREQUENCY = 60       # 1 trade BUY et/ou 1 trade SELL toutes les 1 minute (60 secondes)
 DAILY_PROFIT_LIMIT = 400    # Limite de profit par jour en EUR/USD
 
 # Configuration profit journalier - Balance de référence
@@ -115,6 +116,10 @@ class UltraScalpingBot:
             'daily_start': datetime.now().date(),  # Date de début du jour
             'daily_limit_reached': False  # Flag pour limite journalière atteinte
         }
+        
+        # 🕐 CONTRÔLE FRÉQUENCE DES TRADES - Séparé pour BUY et SELL
+        self.last_buy_timestamp = datetime.now() - timedelta(seconds=TRADE_FREQUENCY)  # Permet le premier BUY
+        self.last_sell_timestamp = datetime.now() - timedelta(seconds=TRADE_FREQUENCY)  # Permet le premier SELL
         
         # Variables système profit quotidien adaptatif
         self.daily_start_balance = 0  # Balance de départ du jour
@@ -628,9 +633,9 @@ class UltraScalpingBot:
         pour qu'au pire, elle se termine à zéro.
         
         Comment ça marche :
-        - Dès que le trade atteint +15 pips (analyse TOUTES LES SECONDES)
+        - Dès que le trade atteint +40 pips (analyse TOUTES LES SECONDES)
         - On déplace automatiquement le SL initial vers le prix d'entrée
-        - Scénario 1 (Idéal): Prix continue → TP à 23 pips
+        - Scénario 1 (Idéal): Prix continue → TP à 46 pips
         - Scénario 2 (Reversal): Prix se retourne → SL à 0€ au lieu de -30€
         """
         if not self.open_positions:
@@ -660,12 +665,12 @@ class UltraScalpingBot:
             if not mt5_position:
                 continue
             
-            # Vérification si c'est un trade BUY
+            # Vérification BUY ou SELL avec même système de breakeven
             if position_type == 'BUY':
                 current_profit_pips = (current_price.bid - entry_price) / 0.01  # Profit en pips
-                
-                # Seuil de verrouillage : +15 pips (breakeven plus agressif)
-                if current_profit_pips >= 15.0:
+
+                # Seuil de verrouillage : +40 pips (breakeven plus conservateur)
+                if current_profit_pips >= 40.0:
                     
                     # Vérification si le SL n'est pas déjà au breakeven
                     if mt5_position.sl < entry_price - 0.1:  # SL encore loin du prix d'entrée
@@ -685,12 +690,16 @@ class UltraScalpingBot:
                         result = mt5.order_send(request)
                         
                         if result.retcode == mt5.TRADE_RETCODE_DONE:
-                            safe_log(f"🔒 GAINS VERROUILLÉS! Ticket {ticket}")
+                            safe_log(f"🔒 BUY GAINS VERROUILLÉS! Ticket {ticket}")
                             safe_log(f"   💰 Profit actuel: +{current_profit_pips:.1f} pips")
                             safe_log(f"   🛡️ SL déplacé au breakeven: ${new_sl:.2f}")
                             safe_log(f"   ✅ Trade sécurisé: Perte max = 0€")
                         else:
                             safe_log(f"❌ Échec déplacement SL pour {ticket}: {result.comment}")
+            
+            else:
+                # On ne gère plus les SELL, mais on log si on en trouve
+                safe_log(f"⚠️ Position SELL détectée (ticket {ticket}) - Cette stratégie ne gère que les BUY")
     
     def close_position_by_ticket(self, ticket):
         """Ferme une position spécifique par son ticket"""
@@ -773,7 +782,11 @@ class UltraScalpingBot:
         
         # Reset si nouveau jour
         if self.stats['daily_start'] != today:
+            was_paused = self.stats['daily_limit_reached']  # Sauvegarde si le bot était en pause
             safe_log(f"🌅 Nouveau jour détecté - Reinitialisation du système")
+            if was_paused:
+                safe_log(f"🔄 REPRISE D'ACTIVITÉ - Bot sort de pause")
+                safe_log(f"⚡ Nouveau défi quotidien commence !")
             self.initialize_daily_profit_system()
         
         # Calcul du profit en temps réel
@@ -1039,7 +1052,10 @@ class UltraScalpingBot:
         return [50] * period + rsi_values
     
     def should_open_position(self, trend, strength, indicators):
-        """Décide si on doit ouvrir une position BUY"""
+        """Détermine si une position BUY doit être ouverte (TOUJOURS BUY peu importe la direction)"""
+        
+        current_time = datetime.now()
+        current_rsi = indicators['rsi']
         
         # Vérification limite journalière de profit
         if self.stats['daily_limit_reached']:
@@ -1053,18 +1069,41 @@ class UltraScalpingBot:
         if trend == "SIDEWAYS" or strength < 0.01:  # Force minimum 0.01%
             return None
         
-        current_rsi = indicators['rsi']
-        
-        # LOGIQUE BUY UNIQUEMENT:
-        # Si marché BEARISH (baisse) → BUY (bet sur rebond)
-        # Plus de SELL - Seulement des achats
-        
+        # � LOGIQUE BUY UNIVERSELLE: On achète dans TOUS les cas
         if trend == "BEARISH" and strength > 0.015:  # Baisse forte
-            # Conditions pour ACHETER (contre la baisse)
+            # Vérification cooldown BUY (5 minutes)
+            time_since_last_buy = (current_time - self.last_buy_timestamp).total_seconds()
+            
+            if time_since_last_buy < TRADE_FREQUENCY:
+                remaining_time = TRADE_FREQUENCY - time_since_last_buy
+                safe_log(f"⏳ BUY Cooldown: {remaining_time:.0f}s restantes")
+                return None
+            
+            # Conditions pour ACHETER sur la baisse (bet sur rebond)
             if current_rsi < self.config['RSI_OVERSOLD']:  # RSI selon config
                 return {
                     'type': 'BUY', 
-                    'reason': 'FADE_BEARISH_TREND',
+                    'reason': 'BUY_ON_DIP',  # Achat sur la baisse
+                    'strength': strength,
+                    'rsi': current_rsi,
+                    'confidence': min(strength * 50, 0.9)
+                }
+        
+        # � LOGIQUE BUY AUSSI: Marché BULLISH (hausse) → BUY aussi (bet sur continuation)
+        elif trend == "BULLISH" and strength > 0.015:  # Hausse forte
+            # Vérification cooldown BUY (même cooldown pour tout)
+            time_since_last_buy = (current_time - self.last_buy_timestamp).total_seconds()
+            
+            if time_since_last_buy < TRADE_FREQUENCY:
+                remaining_time = TRADE_FREQUENCY - time_since_last_buy
+                safe_log(f"⏳ BUY Cooldown: {remaining_time:.0f}s restantes")
+                return None
+            
+            # Conditions pour ACHETER sur la hausse (bet sur continuation)
+            if current_rsi > self.config['RSI_OVERBOUGHT']:  # RSI selon config
+                return {
+                    'type': 'BUY', 
+                    'reason': 'BUY_ON_MOMENTUM',  # Achat sur momentum
                     'strength': strength,
                     'rsi': current_rsi,
                     'confidence': min(strength * 50, 0.9)
@@ -1073,9 +1112,9 @@ class UltraScalpingBot:
         return None
     
     def execute_ultra_scalp_trade(self, signal, current_price):
-        """Exécute un trade de scalping ultra rapide"""
+        """Exécute un trade de scalping BUY uniquement"""
         
-        trade_type = signal['type']
+        trade_type = signal['type']  # Toujours 'BUY' maintenant
         
         # Récupération prix réel pour calcul TP
         tick_info = mt5.symbol_info_tick(self.symbol)
@@ -1083,23 +1122,21 @@ class UltraScalpingBot:
             safe_log("❌ Impossible de récupérer prix pour TP")
             return
         
-        # Calcul des niveaux avec prix réel
-        if trade_type == 'BUY':
-            entry_price = tick_info.ask  # Prix d'achat réel
-            tp_price = entry_price + (TP_PIPS * 0.01)  # TP à +TP_PIPS pips
-            sl_price = entry_price - (1170 * 0.01)  # SL à -1170 points pour les BUY
-        else:  # SELL
-            entry_price = tick_info.bid  # Prix de vente réel
-            tp_price = entry_price - (TP_PIPS * 0.01)  # TP à -TP_PIPS pips 
-            sl_price = entry_price + (TP_PIPS * 2 * 0.01) if USE_STOP_LOSS else None  # SL à 2x TP pour SELL seulement
+        # Calcul des niveaux pour BUY uniquement
+        entry_price = tick_info.ask  # Prix d'achat réel
+        tp_price = entry_price + (TP_PIPS * 0.01)  # TP à +TP_PIPS pips
+        sl_price = entry_price - (1170 * 0.01)  # SL à -1170 points pour les BUY
         
         # Log du signal
         safe_log(f"⚡ ULTRA SCALP {trade_type} - {signal['reason']}")
         safe_log(f"   💰 Prix: ${entry_price:.2f}")
         safe_log(f"   🎯 TP: ${tp_price:.2f} ({TP_PIPS} pips)")
-        safe_log(f"   🛡️ SL: {'AUCUN' if sl_price is None else f'${sl_price:.2f}'}")
+        safe_log(f"   🛡️ SL: ${sl_price:.2f} (1170 points)")
         safe_log(f"   📊 Force: {signal['strength']:.3f}% | RSI: {signal['rsi']:.1f}")
         safe_log(f"   🎲 Confiance: {signal['confidence']:.2f}")
+        
+        # 🕐 MISE À JOUR TIMESTAMP BUY unique
+        self.last_buy_timestamp = datetime.now()
         
         if ENABLE_REAL_TRADING:
             # 🚀 TRADING RÉEL MT5
@@ -1172,8 +1209,10 @@ class UltraScalpingBot:
         if daily_limit_reached:
             all_closed = self.close_profitable_positions()
             if all_closed:
-                safe_log("🏁 Journée terminée - Arrêt du bot")
-                self.is_trading = False
+                safe_log("⏸️ Objectif atteint - Bot en PAUSE jusqu'à demain")
+                safe_log("💤 Surveillance des nouvelles positions en perte...")
+                safe_log("🌅 Reprise automatique le lendemain")
+                # On ne met PAS self.is_trading = False pour garder le bot actif
                 return
             # Continue le cycle pour surveiller les positions restantes
         
@@ -1190,18 +1229,27 @@ class UltraScalpingBot:
         # Affichage détaillé du statut profit toutes les 10 secondes
         self.display_profit_status()
         
-        # Affichage état marché (compact pour scalping)
+        # Affichage état marché avec cooldown BUY uniquement
         open_positions_count = len(self.open_positions)
         daily_status = f"💰{self.stats['daily_profit']:.1f}€/{self.daily_profit_target}€"
         if self.stats['daily_limit_reached']:
             daily_status += " ⏸️"
-        safe_log(f"📊 ${current_price:.2f} | {trend} {strength:.3f}% | RSI:{indicators['rsi']:.1f} | BUY:{self.buy_positions_count} | {daily_status}")
+            
+        # Calcul cooldown restant (BUY uniquement)
+        current_time = datetime.now()
+        buy_cooldown = max(0, int(TRADE_FREQUENCY - (current_time.timestamp() - self.last_buy_timestamp.timestamp())))
         
-        # Vérification signal BUY
+        cooldown_status = f"BUY:{buy_cooldown}s"
+        
+        safe_log(f"📊 ${current_price:.2f} | {trend} {strength:.3f}% | RSI:{indicators['rsi']:.1f} | Positions:{open_positions_count} | {cooldown_status} | {daily_status}")
+        
+        # Vérification signal BUY uniquement
         signal = self.should_open_position(trend, strength, indicators)
         
         if signal:
-            safe_log(f"🔥 SIGNAL BUY: {signal['type']} vs {trend}")
+            signal_type = signal['type']  # Toujours BUY maintenant
+            reason = signal['reason']
+            safe_log(f"🔥 SIGNAL {signal_type}: {reason} détecté avec {trend}")
             self.execute_ultra_scalp_trade(signal, current_price)
         
         # Affichage stats rapides toutes les 10 trades
@@ -1226,9 +1274,9 @@ class UltraScalpingBot:
         safe_log(f"\n🔥 LANCEMENT ULTRA SCALPING SESSION")
         safe_log("="*60)
         safe_log(f"⚡ Stratégie: BUY UNIQUEMENT")
-        safe_log(f"� Baisse → BUY (bet sur rebond)")
-        safe_log(f"🚫 Plus de SELL - Seulement des achats")
-        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: -1170 points + Breakeven à +15 pips")
+        safe_log(f"� BEARISH → BUY (sur rebond) | 🟢 BULLISH → BUY aussi (sur momentum)")
+        safe_log(f"⏰ Cooldown: 5 minutes entre chaque BUY")
+        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: -1170 points + Breakeven à +40 pips")
         safe_log(f"⏱️ Durée: {duration_minutes} minutes")
         safe_log(f"🔄 Analyse: toutes les {ANALYSIS_INTERVAL} secondes")
         safe_log("")
@@ -1266,7 +1314,7 @@ class UltraScalpingBot:
         safe_log("="*60)
         safe_log(f"♾️ Session sans limite de temps")
         safe_log(f"⚡ Analyse toutes les {ANALYSIS_INTERVAL} secondes")
-        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: -1170 points + Breakeven à +15 pips")
+        safe_log(f"🎯 TP: {TP_PIPS} pips | SL: -1170 points + Breakeven à +40 pips + Trade/30s")
         safe_log(f"⏹️ Arrêt: Ctrl+C")
         
         self.is_trading = True
@@ -1356,7 +1404,7 @@ def main():
     safe_log("⚡ Stratégie: Achats sur rebonds uniquement")
     safe_log("� Baisse détectée → BUY (bet sur rebond)") 
     safe_log("� Plus de SELL - Seulement des achats")
-    safe_log(f"🎯 TP: {TP_PIPS} pips | SL: -1170 points + Breakeven à +15 pips (BUY seulement)")
+    safe_log(f"🎯 TP: {TP_PIPS} pips | SL: -1170 points + Breakeven à +40 pips + Trade/30s (BUY seulement)")
     
     if ENABLE_REAL_TRADING:
         safe_log("⚠️ ATTENTION: TRADING RÉEL ACTIVÉ!")
