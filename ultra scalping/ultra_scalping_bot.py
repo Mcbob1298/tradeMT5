@@ -386,6 +386,15 @@ class UltraScalpingBot:
             else:
                 status_emoji = "🌱"    # Démarrage
             
+            # 🛡️ Vérification filet de sécurité
+            loss_limit = -self.daily_profit_target * 0.75
+            if current_profit < 0:
+                loss_percentage = (current_profit / loss_limit) * 100 if loss_limit < 0 else 0
+                if current_profit <= loss_limit:
+                    status_emoji = "🚨🛑"  # Limite atteinte
+                elif loss_percentage >= 50:  # Plus de 50% de la limite de perte
+                    status_emoji = "⚠️🔻"   # Alerte perte
+            
             safe_log(f"")
             safe_log(f"{status_emoji} ═══ STATUT PROFIT QUOTIDIEN ═══")
             safe_log(f"💰 Balance actuelle: {current_balance:.2f}€")
@@ -395,6 +404,21 @@ class UltraScalpingBot:
             safe_log(f"📈 Progrès: {progress_pct:.1f}% ({current_profit:.0f}€/{self.daily_profit_target}€)")
             safe_log(f"⏳ Restant à faire: {remaining_profit:+.2f}€")
             safe_log(f"🎪 Balance cible: {target_balance:.2f}€")
+            
+            # 🛡️ Affichage filet de sécurité
+            safe_log(f"🛡️ Limite sécurité: {loss_limit:.2f}€ (75% objectif)")
+            if current_profit < 0:
+                loss_percentage = (current_profit / loss_limit) * 100 if loss_limit < 0 else 0
+                if current_profit <= loss_limit:
+                    safe_log(f"🚨 LIMITE SÉCURITÉ ATTEINTE ! ({current_profit:.2f}€/{loss_limit:.2f}€)")
+                elif loss_percentage >= 50:
+                    safe_log(f"⚠️ ALERTE PERTES : {current_profit:.2f}€/{loss_limit:.2f}€ ({loss_percentage:.1f}% de la limite)")
+                    safe_log(f"💡 Attention à la gestion des risques !")
+                else:
+                    safe_log(f"✅ Pertes sous contrôle: {current_profit:.2f}€/{loss_limit:.2f}€")
+            else:
+                safe_log(f"✅ Pas de pertes - Protection active")
+            
             safe_log(f"════════════════════════════════")
             safe_log(f"")
             
@@ -792,6 +816,18 @@ class UltraScalpingBot:
         # Calcul du profit en temps réel
         current_daily_profit = self.calculate_real_time_daily_profit()
         self.stats['daily_profit'] = current_daily_profit
+        
+        # 🛡️ FILET DE SÉCURITÉ - Vérification limite de perte (75% de l'objectif)
+        loss_limit = -self.daily_profit_target * 0.75  # 75% de l'objectif en négatif
+        
+        if current_daily_profit <= loss_limit and not self.stats['daily_limit_reached']:
+            self.stats['daily_limit_reached'] = True
+            safe_log(f"🚨 LIMITE DE SÉCURITÉ ATTEINTE !")
+            safe_log(f"📊 Perte actuelle: {current_daily_profit:.2f}€")
+            safe_log(f"🛡️ Limite sécurité: {loss_limit:.2f}€ (75% de {self.daily_profit_target}€)")
+            safe_log(f"⏸️ Bot en PAUSE jusqu'à demain pour protection du capital")
+            safe_log(f"🌅 Reprise automatique le lendemain")
+            return True
         
         # Vérification de la limite (objectif atteint)
         if current_daily_profit >= self.daily_profit_target and not self.stats['daily_limit_reached']:
