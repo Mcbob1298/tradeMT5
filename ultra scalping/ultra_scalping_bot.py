@@ -7,12 +7,19 @@ ULTRA SCALPING BOT - STRATÉGIE BUY UNIQUEMENT
 ⚡ Logique: Detecte les baisses et achète sur rebonds
 📉 Baisse détectée → BUY (bet sur rebond)
 🚫 Plus de SELL - Seulement des achats
+⚠️ SANS LIMITE DE PROFIT OU DE PERTE
+
+🛡️ FILET DE SÉCURITÉ ANTI-SL:
+- Si 10 SL en 1 journée → Suppression des SL sur toutes les positions
+- Bot en pause jusqu'à ce que toutes les positions deviennent profitables
+- Reprise automatique du trading quand tout est en profit
 
 ⚠️ ATTENTION: Stratégie très risquée!
 - TP minimal (quelques pips)
-- Stop Loss BUY: 1170 points
+- Stop Loss BUY: 1170 points (sauf mode sécurité)
 - Trading haute fréquence
 - Capital à risque uniquement!
+- Aucune limite quotidienne
 
 Auteur: Ultra Scalper
 Date: 14 août 2025
@@ -22,6 +29,10 @@ import MetaTrader5 as mt5
 import numpy as np
 from datetime import datetime, timedelta
 import sys
+import io
+import time
+import random
+import traceback
 import os
 import time
 import random
@@ -41,8 +52,8 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 # CONFIGURATION ULTRA SCALPING
 # =============================================================================
 ENABLE_REAL_TRADING = True   # ✅ TRADING RÉEL ACTIVÉ sur compte démo
-MT5_LOGIN = 95621570       # Votre compte démo
-MT5_PASSWORD = "Q-Ke5cKw"    
+MT5_LOGIN = 5039506784       # Votre compte démo
+MT5_PASSWORD = "-mNfM1Uz"    
 MT5_SERVER = "MetaQuotes-Demo"
 
 # Paramètres ultra agressifs
@@ -54,10 +65,6 @@ USE_STOP_LOSS = True        # Stop Loss activé pour BUY et SELL
 MAX_POSITIONS = 99999999999           # Maximum 5 positions simultanées
 ANALYSIS_INTERVAL = 10      # Analyse toutes les 10 secondes
 TRADE_FREQUENCY = 60       # 1 trade BUY et/ou 1 trade SELL toutes les 1 minute (60 secondes)
-DAILY_PROFIT_LIMIT = 400    # Limite de profit par jour en EUR/USD
-
-# Configuration profit journalier - Balance de référence
-INITIAL_BALANCE_TODAY = 3000.00  # Balance de référence (début de journée 15/08/2025)
 
 # Seuils de détection de tendance (ultra sensibles)
 TREND_EMA_FAST = 5          # EMA rapide (5 périodes)
@@ -114,7 +121,8 @@ class UltraScalpingBot:
             'last_trade_time': None,
             'daily_profit': 0,  # Profit du jour en cours
             'daily_start': datetime.now().date(),  # Date de début du jour
-            'daily_limit_reached': False  # Flag pour limite journalière atteinte
+            'daily_sl_count': 0,  # Compteur de SL par jour
+            'safety_mode_active': False  # Mode sécurité activé (pause trading)
         }
         
         # 🕐 CONTRÔLE FRÉQUENCE DES TRADES - Séparé pour BUY et SELL
@@ -123,7 +131,6 @@ class UltraScalpingBot:
         
         # Variables système profit quotidien adaptatif
         self.daily_start_balance = 0  # Balance de départ du jour
-        self.daily_profit_target = 0  # Objectif de profit quotidien calculé automatiquement
         
         # État des positions
         self.open_positions = []
@@ -311,24 +318,6 @@ class UltraScalpingBot:
             safe_log(f"❌ Erreur calcul lot adaptatif: {e}")
             return 0.01  # Valeur par défaut en cas d'erreur
     
-    def calculate_daily_profit_target(self, balance):
-        """Calcule l'objectif de profit quotidien basé sur la balance (10% par tranche de 1000€)"""
-        try:
-            # Calcul par tranches de 1000€ avec objectif de 10% (100€ par tranche de 1000€)
-            tranche = int(balance / 1000)  # Tranche de 1000€
-            
-            if tranche == 0:  # 0-999€
-                target = 100
-            else:  # 1000€+, 100€ par tranche de 1000€
-                target = tranche * 100
-            
-            safe_log(f"🎯 Balance: ${balance:.2f} → Objectif quotidien: {target}€ (tranche {tranche})")
-            return target
-            
-        except Exception as e:
-            safe_log(f"❌ Erreur calcul objectif quotidien: {e}")
-            return 100  # Objectif par défaut
-    
     def initialize_daily_profit_system(self):
         """Initialise le système de profit quotidien au démarrage ou nouveau jour"""
         try:
@@ -342,88 +331,21 @@ class UltraScalpingBot:
             
             # Sauvegarde de la balance de départ du jour
             self.daily_start_balance = current_balance
-            self.daily_profit_target = self.calculate_daily_profit_target(current_balance)
             
             # Reset des stats quotidiennes
             self.stats['daily_start'] = today
             self.stats['daily_profit'] = 0
-            self.stats['daily_limit_reached'] = False
+            self.stats['daily_sl_count'] = 0  # Reset compteur SL
+            self.stats['safety_mode_active'] = False  # Reset mode sécurité
             
             safe_log(f"🌅 SYSTÈME PROFIT QUOTIDIEN INITIALISÉ:")
             safe_log(f"   📅 Date: {today.strftime('%d/%m/%Y')}")
             safe_log(f"   💰 Balance de départ: {self.daily_start_balance:.2f}€")
-            safe_log(f"   🎯 Objectif quotidien: {self.daily_profit_target}€")
-            safe_log(f"   📊 Balance cible: {self.daily_start_balance + self.daily_profit_target:.2f}€")
+            safe_log(f"   🛡️ Compteur SL: 0/10 (reset)")
+            safe_log(f"   🔄 Mode sécurité: Désactivé")
             
         except Exception as e:
             safe_log(f"❌ Erreur initialisation système profit quotidien: {e}")
-    
-    def display_profit_status(self):
-        """Affiche le statut détaillé du profit toutes les 10 secondes"""
-        try:
-            # Calcul du profit en temps réel
-            current_profit = self.calculate_real_time_daily_profit()
-            
-            # Récupération de la balance actuelle
-            account_info = mt5.account_info()
-            if not account_info:
-                return
-            
-            current_balance = account_info.balance
-            target_balance = self.daily_start_balance + self.daily_profit_target
-            remaining_profit = self.daily_profit_target - current_profit
-            progress_pct = (current_profit / self.daily_profit_target * 100) if self.daily_profit_target > 0 else 0
-            
-            # Statut emoji basé sur le progrès
-            if progress_pct >= 100:
-                status_emoji = "🎯✅"  # Objectif atteint
-            elif progress_pct >= 75:
-                status_emoji = "🔥"    # Très proche
-            elif progress_pct >= 50:
-                status_emoji = "📈"    # Bon progrès
-            elif progress_pct >= 25:
-                status_emoji = "⚡"    # En cours
-            else:
-                status_emoji = "🌱"    # Démarrage
-            
-            # 🛡️ Vérification filet de sécurité
-            loss_limit = -self.daily_profit_target * 0.75
-            if current_profit < 0:
-                loss_percentage = (current_profit / loss_limit) * 100 if loss_limit < 0 else 0
-                if current_profit <= loss_limit:
-                    status_emoji = "🚨🛑"  # Limite atteinte
-                elif loss_percentage >= 50:  # Plus de 50% de la limite de perte
-                    status_emoji = "⚠️🔻"   # Alerte perte
-            
-            safe_log(f"")
-            safe_log(f"{status_emoji} ═══ STATUT PROFIT QUOTIDIEN ═══")
-            safe_log(f"💰 Balance actuelle: {current_balance:.2f}€")
-            safe_log(f"🏁 Balance de départ: {self.daily_start_balance:.2f}€")
-            safe_log(f"🎯 Objectif du jour: {self.daily_profit_target}€")
-            safe_log(f"📊 Profit actuel: {current_profit:+.2f}€")
-            safe_log(f"📈 Progrès: {progress_pct:.1f}% ({current_profit:.0f}€/{self.daily_profit_target}€)")
-            safe_log(f"⏳ Restant à faire: {remaining_profit:+.2f}€")
-            safe_log(f"🎪 Balance cible: {target_balance:.2f}€")
-            
-            # 🛡️ Affichage filet de sécurité
-            safe_log(f"🛡️ Limite sécurité: {loss_limit:.2f}€ (75% objectif)")
-            if current_profit < 0:
-                loss_percentage = (current_profit / loss_limit) * 100 if loss_limit < 0 else 0
-                if current_profit <= loss_limit:
-                    safe_log(f"🚨 LIMITE SÉCURITÉ ATTEINTE ! ({current_profit:.2f}€/{loss_limit:.2f}€)")
-                elif loss_percentage >= 50:
-                    safe_log(f"⚠️ ALERTE PERTES : {current_profit:.2f}€/{loss_limit:.2f}€ ({loss_percentage:.1f}% de la limite)")
-                    safe_log(f"💡 Attention à la gestion des risques !")
-                else:
-                    safe_log(f"✅ Pertes sous contrôle: {current_profit:.2f}€/{loss_limit:.2f}€")
-            else:
-                safe_log(f"✅ Pas de pertes - Protection active")
-            
-            safe_log(f"════════════════════════════════")
-            safe_log(f"")
-            
-        except Exception as e:
-            safe_log(f"⚠️ Erreur affichage statut profit: {e}")
     
     def calculate_real_time_daily_profit(self):
         """Calcule le profit quotidien en temps réel basé sur la balance actuelle"""
@@ -434,20 +356,8 @@ class UltraScalpingBot:
             
             current_balance = account_info.balance
             
-            # Formule: (Balance de départ + Objectif) - Balance actuelle = Reste à gagner
-            # Donc: Objectif - Reste à gagner = Profit actuel
-            balance_target = self.daily_start_balance + self.daily_profit_target
-            remaining_to_earn = balance_target - current_balance
-            current_profit = self.daily_profit_target - remaining_to_earn
-            
-            # Debug pour comprendre le calcul
-            safe_log(f"🔍 Calcul profit temps réel:")
-            safe_log(f"   💰 Balance départ: {self.daily_start_balance:.2f}€")
-            safe_log(f"   🎯 Objectif: {self.daily_profit_target}€")
-            safe_log(f"   📊 Balance cible: {balance_target:.2f}€")
-            safe_log(f"   💳 Balance actuelle: {current_balance:.2f}€")
-            safe_log(f"   📈 Reste à gagner: {remaining_to_earn:.2f}€")
-            safe_log(f"   ✅ PROFIT ACTUEL: {current_profit:.2f}€/{self.daily_profit_target}€")
+            # Simple calcul: Balance actuelle - Balance de départ = Profit/Perte de la journée
+            current_profit = current_balance - self.daily_start_balance
             
             return current_profit
             
@@ -631,6 +541,8 @@ class UltraScalpingBot:
                         safe_log(f"✅ Position fermée (TP): Ticket {position['ticket']} | Profit: {profit:+.2f}€ | Durée: {duration_str}")
                     elif close_type == 'SL':
                         safe_log(f"❌ Position fermée (SL): Ticket {position['ticket']} | Perte: {profit:+.2f}€ | Durée: {duration_str}")
+                        # 🛡️ FILET DE SÉCURITÉ - Comptage des SL
+                        self.handle_stop_loss_detected()
                     else:
                         safe_log(f"🔄 Position fermée: Ticket {position['ticket']} | P&L: {profit:+.2f}€ | Durée: {duration_str}")
                 else:
@@ -646,6 +558,151 @@ class UltraScalpingBot:
         # Suppression en ordre inverse
         for i in reversed(positions_to_remove):
             self.open_positions.pop(i)
+    
+    def handle_stop_loss_detected(self):
+        """🛡️ FILET DE SÉCURITÉ - Gestion des Stop Loss détectés"""
+        # Vérification si c'est un nouveau jour
+        today = datetime.now().date()
+        if self.stats['daily_start'] != today:
+            # Reset du compteur pour le nouveau jour
+            safe_log(f"🌅 Nouveau jour - Reset compteur SL")
+            self.stats['daily_start'] = today
+            self.stats['daily_sl_count'] = 0
+            self.stats['safety_mode_active'] = False
+        
+        # Incrémentation du compteur de SL
+        self.stats['daily_sl_count'] += 1
+        safe_log(f"🔴 STOP LOSS #{self.stats['daily_sl_count']}/10 détecté")
+        
+        # Vérification du seuil critique (10 SL)
+        if self.stats['daily_sl_count'] >= 10 and not self.stats['safety_mode_active']:
+            safe_log(f"🚨 ALERTE CRITIQUE - 10 STOP LOSS ATTEINTS!")
+            safe_log(f"🛡️ ACTIVATION DU FILET DE SÉCURITÉ")
+            self.activate_safety_mode()
+    
+    def activate_safety_mode(self):
+        """🛡️ Active le mode sécurité - Supprime les SL et met en pause"""
+        try:
+            self.stats['safety_mode_active'] = True
+            safe_log(f"🔒 ACTIVATION MODE SÉCURITÉ")
+            safe_log(f"📋 Étapes:")
+            safe_log(f"   1️⃣ Suppression des SL sur toutes les positions ouvertes")
+            safe_log(f"   2️⃣ Pause du trading (pas de nouveaux trades)")
+            safe_log(f"   3️⃣ Attente que toutes les positions deviennent profitables")
+            safe_log(f"   4️⃣ Reprise automatique quand tout est en profit")
+            
+            # Récupération des positions ouvertes
+            mt5_positions = mt5.positions_get(symbol=self.symbol)
+            if not mt5_positions:
+                safe_log(f"ℹ️ Aucune position ouverte à modifier")
+                return
+            
+            # Suppression des SL sur toutes les positions
+            removed_sl_count = 0
+            for position in mt5_positions:
+                if position.sl != 0:  # Si la position a un SL
+                    success = self.remove_stop_loss_from_position(position.ticket)
+                    if success:
+                        removed_sl_count += 1
+            
+            safe_log(f"✅ Mode sécurité activé!")
+            safe_log(f"   🔧 {removed_sl_count} Stop Loss supprimés")
+            safe_log(f"   ⏸️ Trading en PAUSE")
+            safe_log(f"   💡 Le bot surveillera les positions et reprendra quand tout sera profitable")
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur activation mode sécurité: {e}")
+    
+    def remove_stop_loss_from_position(self, ticket):
+        """Supprime le Stop Loss d'une position spécifique"""
+        try:
+            # Récupération de la position
+            positions = mt5.positions_get(ticket=ticket)
+            if not positions:
+                return False
+            
+            position = positions[0]
+            
+            # Modification pour supprimer le SL (SL = 0)
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "symbol": self.symbol,
+                "position": ticket,
+                "sl": 0.0,  # Suppression du SL
+                "tp": position.tp,  # Garde le même TP
+            }
+            
+            result = mt5.order_send(request)
+            
+            if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                safe_log(f"🔧 SL supprimé - Ticket {ticket}")
+                return True
+            else:
+                error_msg = result.comment if result else "Erreur inconnue"
+                safe_log(f"❌ Échec suppression SL - Ticket {ticket}: {error_msg}")
+                return False
+                
+        except Exception as e:
+            safe_log(f"❌ Erreur suppression SL {ticket}: {e}")
+            return False
+    
+    def check_safety_mode_exit_conditions(self):
+        """Vérifie si les conditions de sortie du mode sécurité sont remplies"""
+        if not self.stats['safety_mode_active']:
+            return False
+        
+        # Récupération des positions ouvertes
+        mt5_positions = mt5.positions_get(symbol=self.symbol)
+        if not mt5_positions:
+            # Plus de positions ouvertes, on peut reprendre
+            safe_log(f"✅ SORTIE MODE SÉCURITÉ - Aucune position ouverte")
+            safe_log(f"🔄 Reprise du trading normal")
+            self.stats['safety_mode_active'] = False
+            return True
+        
+        # Vérification et fermeture des positions profitables
+        profitable_count = 0
+        losing_count = 0
+        closed_count = 0
+        
+        for position in mt5_positions:
+            if position.profit > 0:
+                profitable_count += 1
+                # Fermeture automatique de la position profitable
+                success = self.close_position_by_ticket(position.ticket)
+                if success:
+                    closed_count += 1
+                    self.update_daily_profit(position.profit)
+                    safe_log(f"💰 Position fermée (mode sécurité): Ticket {position.ticket} | Profit: +{position.profit:.2f}€")
+            else:
+                losing_count += 1
+        
+        # Log du statut
+        if profitable_count > 0:
+            safe_log(f"🛡️ MODE SÉCURITÉ - Fermeture positions profitables:")
+            safe_log(f"   ✅ Fermées: {closed_count}/{profitable_count}")
+            safe_log(f"   ❌ En attente (perte): {losing_count}")
+        
+        # Vérification après fermetures - récupération mise à jour
+        remaining_positions = mt5.positions_get(symbol=self.symbol)
+        if not remaining_positions:
+            safe_log(f"🎉 SORTIE MODE SÉCURITÉ - Toutes les positions fermées!")
+            safe_log(f"🔄 Reprise du trading normal")
+            self.stats['safety_mode_active'] = False
+            return True
+        else:
+            # Log périodique du statut (toutes les 10 vérifications)
+            if hasattr(self, '_safety_check_count'):
+                self._safety_check_count += 1
+            else:
+                self._safety_check_count = 1
+            
+            if self._safety_check_count % 10 == 0:  # Toutes les 10 vérifications (100 secondes)
+                safe_log(f"🛡️ MODE SÉCURITÉ ACTIF - Attente fermeture complète:")
+                safe_log(f"   📊 Positions restantes: {len(remaining_positions)}")
+                safe_log(f"   ⏳ Les positions profitables sont fermées automatiquement...")
+            
+            return False
     
     def check_and_move_sl_to_breakeven(self):
         """
@@ -800,44 +857,6 @@ class UltraScalpingBot:
         
         return data
     
-    def check_daily_profit_limit(self):
-        """Vérifie si la limite journalière de profit est atteinte"""
-        today = datetime.now().date()
-        
-        # Reset si nouveau jour
-        if self.stats['daily_start'] != today:
-            was_paused = self.stats['daily_limit_reached']  # Sauvegarde si le bot était en pause
-            safe_log(f"🌅 Nouveau jour détecté - Reinitialisation du système")
-            if was_paused:
-                safe_log(f"🔄 REPRISE D'ACTIVITÉ - Bot sort de pause")
-                safe_log(f"⚡ Nouveau défi quotidien commence !")
-            self.initialize_daily_profit_system()
-        
-        # Calcul du profit en temps réel
-        current_daily_profit = self.calculate_real_time_daily_profit()
-        self.stats['daily_profit'] = current_daily_profit
-        
-        # 🛡️ FILET DE SÉCURITÉ - Vérification limite de perte (75% de l'objectif)
-        loss_limit = -self.daily_profit_target * 0.75  # 75% de l'objectif en négatif
-        
-        if current_daily_profit <= loss_limit and not self.stats['daily_limit_reached']:
-            self.stats['daily_limit_reached'] = True
-            safe_log(f"🚨 LIMITE DE SÉCURITÉ ATTEINTE !")
-            safe_log(f"📊 Perte actuelle: {current_daily_profit:.2f}€")
-            safe_log(f"🛡️ Limite sécurité: {loss_limit:.2f}€ (75% de {self.daily_profit_target}€)")
-            safe_log(f"⏸️ Bot en PAUSE jusqu'à demain pour protection du capital")
-            safe_log(f"🌅 Reprise automatique le lendemain")
-            return True
-        
-        # Vérification de la limite (objectif atteint)
-        if current_daily_profit >= self.daily_profit_target and not self.stats['daily_limit_reached']:
-            self.stats['daily_limit_reached'] = True
-            safe_log(f"🎯 OBJECTIF QUOTIDIEN ATTEINT ! {current_daily_profit:.2f}€/{self.daily_profit_target}€")
-            safe_log(f"⏸️ Arrêt des nouveaux trades - En attente que les positions ouvertes deviennent positives")
-            return True
-            
-        return self.stats['daily_limit_reached']
-    
     def get_detailed_position_profit_from_history(self, ticket):
         """Récupère le profit détaillé d'une position depuis l'historique des deals"""
         try:
@@ -929,12 +948,12 @@ class UltraScalpingBot:
         if self.manual_daily_profit is not None:
             self.bot_trades_profit += profit_amount
             self.stats['daily_profit'] = self.manual_daily_profit + self.bot_trades_profit
-            safe_log(f"💰 Profit journalier mis à jour: {self.stats['daily_profit']:.2f}€/{DAILY_PROFIT_LIMIT}€")
+            safe_log(f"💰 Profit journalier mis à jour: {self.stats['daily_profit']:.2f}€")
             safe_log(f"   📊 Base manuelle: {self.manual_daily_profit:.2f}€ + Trades bot: {self.bot_trades_profit:.2f}€")
         else:
             # Sinon ajout direct classique
             self.stats['daily_profit'] += profit_amount
-            safe_log(f"💰 Profit journalier mis à jour: {self.stats['daily_profit']:.2f}€/{DAILY_PROFIT_LIMIT}€")
+            safe_log(f"💰 Profit journalier mis à jour: {self.stats['daily_profit']:.2f}€")
     
     def force_update_manual_profit(self, new_manual_profit):
         """Force la mise à jour du profit manuel (pour corrections)"""
@@ -943,19 +962,19 @@ class UltraScalpingBot:
             self.manual_daily_profit = new_manual_profit
             self.stats['daily_profit'] = self.manual_daily_profit + self.bot_trades_profit
             safe_log(f"🔄 Profit manuel corrigé: {old_profit:.2f}€ → {new_manual_profit:.2f}€")
-            safe_log(f"💰 Nouveau profit total: {self.stats['daily_profit']:.2f}€/{DAILY_PROFIT_LIMIT}€")
+            safe_log(f"💰 Nouveau profit total: {self.stats['daily_profit']:.2f}€")
         else:
             # Si pas de profit manuel, on l'initialise
             self.manual_daily_profit = new_manual_profit
             self.bot_trades_profit = 0
             self.stats['daily_profit'] = new_manual_profit
             safe_log(f"✅ Profit manuel initialisé: {new_manual_profit:.2f}€")
-            safe_log(f"💰 Profit total: {self.stats['daily_profit']:.2f}€/{DAILY_PROFIT_LIMIT}€")
+            safe_log(f"💰 Profit total: {self.stats['daily_profit']:.2f}€")
     
     def force_profit_sync_now(self):
         """Force une synchronisation immédiate du profit avec MT5"""
         safe_log("🔄 Synchronisation forcée du profit...")
-        safe_log(f"✅ Profit actuel: {self.stats['daily_profit']:.2f}€/{DAILY_PROFIT_LIMIT}€")
+        safe_log(f"✅ Profit actuel: {self.stats['daily_profit']:.2f}€")
     
     def close_profitable_positions(self):
         """Ferme toutes les positions qui sont actuellement profitables"""
@@ -983,7 +1002,8 @@ class UltraScalpingBot:
         # Vérification si toutes les positions sont fermées
         remaining_positions = mt5.positions_get(symbol=self.symbol)
         if not remaining_positions:
-            safe_log(f"🏁 Toutes les positions fermées - Journée terminée avec {self.stats['daily_profit']:.2f}€ de profit")
+            current_profit = self.calculate_real_time_daily_profit()
+            safe_log(f"🏁 Toutes les positions fermées - Journée terminée avec {current_profit:.2f}€ de profit")
             return True
             
         return False
@@ -1093,9 +1113,9 @@ class UltraScalpingBot:
         current_time = datetime.now()
         current_rsi = indicators['rsi']
         
-        # Vérification limite journalière de profit
-        if self.stats['daily_limit_reached']:
-            return None  # Pas de nouveaux trades si limite atteinte
+        # 🛡️ FILET DE SÉCURITÉ - Vérification mode sécurité
+        if self.stats['safety_mode_active']:
+            return None  # Pas de nouveaux trades en mode sécurité
         
         # Vérification limites globales
         if self.position_count >= MAX_POSITIONS:
@@ -1105,14 +1125,15 @@ class UltraScalpingBot:
         if trend == "SIDEWAYS" or strength < 0.01:  # Force minimum 0.01%
             return None
         
-        # � LOGIQUE BUY UNIVERSELLE: On achète dans TOUS les cas
+        # 📈 LOGIQUE BUY UNIVERSELLE: On achète dans TOUS les cas
         if trend == "BEARISH" and strength > 0.015:  # Baisse forte
-            # Vérification cooldown BUY (5 minutes)
+            # ⏰ COOLDOWN ADAPTATIF: 5 minutes pour marché en descente
+            bearish_cooldown = 300  # 5 minutes = 300 secondes
             time_since_last_buy = (current_time - self.last_buy_timestamp).total_seconds()
             
-            if time_since_last_buy < TRADE_FREQUENCY:
-                remaining_time = TRADE_FREQUENCY - time_since_last_buy
-                safe_log(f"⏳ BUY Cooldown: {remaining_time:.0f}s restantes")
+            if time_since_last_buy < bearish_cooldown:
+                remaining_time = bearish_cooldown - time_since_last_buy
+                safe_log(f"⏳ BUY Cooldown (BEARISH): {remaining_time:.0f}s restantes (5min)")
                 return None
             
             # Conditions pour ACHETER sur la baisse (bet sur rebond)
@@ -1125,14 +1146,15 @@ class UltraScalpingBot:
                     'confidence': min(strength * 50, 0.9)
                 }
         
-        # � LOGIQUE BUY AUSSI: Marché BULLISH (hausse) → BUY aussi (bet sur continuation)
+        # 📊 LOGIQUE BUY AUSSI: Marché BULLISH (hausse) → BUY aussi (bet sur continuation)
         elif trend == "BULLISH" and strength > 0.015:  # Hausse forte
-            # Vérification cooldown BUY (même cooldown pour tout)
+            # ⏰ COOLDOWN ADAPTATIF: 1 minute pour marché en hausse
+            bullish_cooldown = 60  # 1 minute = 60 secondes
             time_since_last_buy = (current_time - self.last_buy_timestamp).total_seconds()
             
-            if time_since_last_buy < TRADE_FREQUENCY:
-                remaining_time = TRADE_FREQUENCY - time_since_last_buy
-                safe_log(f"⏳ BUY Cooldown: {remaining_time:.0f}s restantes")
+            if time_since_last_buy < bullish_cooldown:
+                remaining_time = bullish_cooldown - time_since_last_buy
+                safe_log(f"⏳ BUY Cooldown (BULLISH): {remaining_time:.0f}s restantes (1min)")
                 return None
             
             # Conditions pour ACHETER sur la hausse (bet sur continuation)
@@ -1238,19 +1260,9 @@ class UltraScalpingBot:
     def run_ultra_scalping_cycle(self):
         """Exécute un cycle d'analyse du marché (toutes les 10 secondes)"""
         
-        # Vérification de la limite journalière de profit
-        daily_limit_reached = self.check_daily_profit_limit()
-        
-        # Si limite atteinte, fermer les positions profitables et attendre
-        if daily_limit_reached:
-            all_closed = self.close_profitable_positions()
-            if all_closed:
-                safe_log("⏸️ Objectif atteint - Bot en PAUSE jusqu'à demain")
-                safe_log("💤 Surveillance des nouvelles positions en perte...")
-                safe_log("🌅 Reprise automatique le lendemain")
-                # On ne met PAS self.is_trading = False pour garder le bot actif
-                return
-            # Continue le cycle pour surveiller les positions restantes
+        # 🛡️ FILET DE SÉCURITÉ - Vérification des conditions de sortie du mode sécurité
+        if self.stats['safety_mode_active']:
+            self.check_safety_mode_exit_conditions()
         
         # Récupération données ultra rapides
         df = self.get_ultra_fast_data()
@@ -1262,31 +1274,57 @@ class UltraScalpingBot:
         
         current_price = indicators['price']  # Utilise le prix depuis les indicateurs
         
-        # Affichage détaillé du statut profit toutes les 10 secondes
-        self.display_profit_status()
-        
         # Affichage état marché avec cooldown BUY uniquement
         open_positions_count = len(self.open_positions)
-        daily_status = f"💰{self.stats['daily_profit']:.1f}€/{self.daily_profit_target}€"
-        if self.stats['daily_limit_reached']:
-            daily_status += " ⏸️"
+        
+        # Calcul du profit actuel simplement
+        current_profit = self.calculate_real_time_daily_profit()
+        daily_status = f"💰{current_profit:+.1f}€"
+        
+        # 🛡️ Ajout du statut de sécurité
+        if self.stats['safety_mode_active']:
+            safety_status = f"🛡️SÉCURITÉ({self.stats['daily_sl_count']}/10 SL)"
+        else:
+            safety_status = f"SL:{self.stats['daily_sl_count']}/10"
             
-        # Calcul cooldown restant (BUY uniquement)
+        # Calcul cooldown restant adaptatif selon la tendance
         current_time = datetime.now()
-        buy_cooldown = max(0, int(TRADE_FREQUENCY - (current_time.timestamp() - self.last_buy_timestamp.timestamp())))
+        time_since_last_buy = current_time.timestamp() - self.last_buy_timestamp.timestamp()
         
-        cooldown_status = f"BUY:{buy_cooldown}s"
+        # Détermination du cooldown selon la tendance
+        if trend == "BEARISH":
+            required_cooldown = 300  # 5 minutes pour descente
+            buy_cooldown = max(0, int(required_cooldown - time_since_last_buy))
+            cooldown_status = f"BUY:{buy_cooldown}s(5min)"
+        elif trend == "BULLISH":
+            required_cooldown = 60   # 1 minute pour hausse
+            buy_cooldown = max(0, int(required_cooldown - time_since_last_buy))
+            cooldown_status = f"BUY:{buy_cooldown}s(1min)"
+        else:
+            # SIDEWAYS - utilise l'ancien système
+            buy_cooldown = max(0, int(TRADE_FREQUENCY - time_since_last_buy))
+            cooldown_status = f"BUY:{buy_cooldown}s"
         
-        safe_log(f"📊 ${current_price:.2f} | {trend} {strength:.3f}% | RSI:{indicators['rsi']:.1f} | Positions:{open_positions_count} | {cooldown_status} | {daily_status}")
+        safe_log(f"📊 ${current_price:.2f} | {trend} {strength:.3f}% | RSI:{indicators['rsi']:.1f} | Positions:{open_positions_count} | {cooldown_status} | {safety_status} | {daily_status}")
         
-        # Vérification signal BUY uniquement
-        signal = self.should_open_position(trend, strength, indicators)
-        
-        if signal:
-            signal_type = signal['type']  # Toujours BUY maintenant
-            reason = signal['reason']
-            safe_log(f"🔥 SIGNAL {signal_type}: {reason} détecté avec {trend}")
-            self.execute_ultra_scalp_trade(signal, current_price)
+        # Vérification signal BUY uniquement (seulement si pas en mode sécurité)
+        if not self.stats['safety_mode_active']:
+            signal = self.should_open_position(trend, strength, indicators)
+            
+            if signal:
+                signal_type = signal['type']  # Toujours BUY maintenant
+                reason = signal['reason']
+                safe_log(f"🔥 SIGNAL {signal_type}: {reason} détecté avec {trend}")
+                self.execute_ultra_scalp_trade(signal, current_price)
+        else:
+            # En mode sécurité, on affiche un message périodique
+            if hasattr(self, '_safety_message_count'):
+                self._safety_message_count += 1
+            else:
+                self._safety_message_count = 1
+            
+            if self._safety_message_count % 30 == 0:  # Toutes les 5 minutes (30 * 10 secondes)
+                safe_log(f"🛡️ MODE SÉCURITÉ ACTIF - Trading en pause jusqu'à ce que toutes les positions deviennent profitables")
         
         # Affichage stats rapides toutes les 10 trades
         if self.stats['total_trades'] > 0 and self.stats['total_trades'] % 10 == 0:
@@ -1310,8 +1348,8 @@ class UltraScalpingBot:
         safe_log(f"\n🔥 LANCEMENT ULTRA SCALPING SESSION")
         safe_log("="*60)
         safe_log(f"⚡ Stratégie: BUY UNIQUEMENT")
-        safe_log(f"� BEARISH → BUY (sur rebond) | 🟢 BULLISH → BUY aussi (sur momentum)")
-        safe_log(f"⏰ Cooldown: 5 minutes entre chaque BUY")
+        safe_log(f"📉 BEARISH → BUY (sur rebond) toutes les 5min | 🟢 BULLISH → BUY (sur momentum) par minute")
+        safe_log(f"⏰ Cooldown adaptatif: 5min (descente) / 1min (hausse)")
         safe_log(f"🎯 TP: {TP_PIPS} pips | SL: -1170 points + Breakeven à +40 pips")
         safe_log(f"⏱️ Durée: {duration_minutes} minutes")
         safe_log(f"🔄 Analyse: toutes les {ANALYSIS_INTERVAL} secondes")
@@ -1438,9 +1476,10 @@ def main():
     safe_log("🔥 ULTRA SCALPING BOT - BUY UNIQUEMENT")
     safe_log("="*60)
     safe_log("⚡ Stratégie: Achats sur rebonds uniquement")
-    safe_log("� Baisse détectée → BUY (bet sur rebond)") 
-    safe_log("� Plus de SELL - Seulement des achats")
+    safe_log("🔴 Baisse détectée → BUY (bet sur rebond)") 
+    safe_log("🟢 Plus de SELL - Seulement des achats")
     safe_log(f"🎯 TP: {TP_PIPS} pips | SL: -1170 points + Breakeven à +40 pips + Trade/30s (BUY seulement)")
+    safe_log("🛡️ FILET SÉCURITÉ: 10 SL/jour → Suppression SL + Pause trading")
     
     if ENABLE_REAL_TRADING:
         safe_log("⚠️ ATTENTION: TRADING RÉEL ACTIVÉ!")
