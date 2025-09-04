@@ -9,10 +9,12 @@ ULTRA SCALPING BOT - STRATÉGIE BUY UNIQUEMENT
 🚫 Plus de SELL - Seulement des achats
 ⚠️ SANS LIMITE DE PROFIT OU DE PERTE
 
-🛡️ FILET DE SÉCURITÉ ANTI-SL:
-- Si 10 SL en 1 journée → Suppression des SL sur toutes les positions
-- Bot en pause jusqu'à ce que toutes les positions deviennent profitables
-- Reprise automatique du trading quand tout est en profit
+🛡️ NOUVEAU FILET DE SÉCURITÉ BALANCE:
+- Si perte atteint -5% de la balance → Suppression des SL sur toutes les positions
+- Bot en pause jusqu'à ce que toutes les positions soient fermées
+- Fermeture automatique des positions profitables
+- Reprise automatique du trading quand tout est fermé
+- Balance de référence mise à jour après récupération
 
 ⚠️ ATTENTION: Stratégie très risquée!
 - TP minimal (quelques pips)
@@ -52,8 +54,8 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 # CONFIGURATION ULTRA SCALPING
 # =============================================================================
 ENABLE_REAL_TRADING = True   # ✅ TRADING RÉEL ACTIVÉ sur compte démo
-MT5_LOGIN = 5039506784       # Votre compte démo
-MT5_PASSWORD = "-mNfM1Uz"    
+MT5_LOGIN = 5039554492       # Votre compte démo
+MT5_PASSWORD = "L-V3AbDk"    
 MT5_SERVER = "MetaQuotes-Demo"
 
 # Paramètres ultra agressifs
@@ -108,6 +110,10 @@ class UltraScalpingBot:
         safe_log(f"📊 RSI SELL > {self.config['RSI_OVERBOUGHT']}")
         safe_log(f"📊 RSI BUY < {self.config['RSI_OVERSOLD']}")
         
+        # 🛡️ NOUVEAU FILET DE SÉCURITÉ - Basé sur % de perte de la balance
+        self.balance_safety_threshold = -0.05  # -5% de perte maximum
+        self.initial_balance = 0  # Balance de référence (sera initialisée)
+        
         # Statistiques ultra scalping
         self.stats = {
             'total_trades': 0,
@@ -121,8 +127,7 @@ class UltraScalpingBot:
             'last_trade_time': None,
             'daily_profit': 0,  # Profit du jour en cours
             'daily_start': datetime.now().date(),  # Date de début du jour
-            'daily_sl_count': 0,  # Compteur de SL par jour
-            'safety_mode_active': False  # Mode sécurité activé (pause trading)
+            'balance_safety_active': False  # Mode sécurité activé (pause trading)
         }
         
         # 🕐 CONTRÔLE FRÉQUENCE DES TRADES - Séparé pour BUY et SELL
@@ -131,6 +136,27 @@ class UltraScalpingBot:
         
         # Variables système profit quotidien adaptatif
         self.daily_start_balance = 0  # Balance de départ du jour
+        
+        # 🕐 HORAIRES DE TRADING - Fermeture automatique à 20h, reprise à 7h30
+        self.daily_close_time = 20  # Heure de fermeture (20h)
+        self.daily_start_time = 7.5   # Heure de reprise (7h30)
+        
+        # Vérification de l'état initial selon l'heure de démarrage
+        current_time = datetime.now()
+        current_hour = current_time.hour
+        current_minute = current_time.minute
+        current_time_decimal = current_hour + (current_minute / 60.0)
+        
+        # Si on démarre en dehors des heures de trading (avant 7h30 ou après 20h)
+        if current_time_decimal < self.daily_start_time or current_time_decimal >= self.daily_close_time:
+            self.is_trading_paused = True  # Démarre en pause
+            safe_log(f"🕐 DÉMARRAGE EN PAUSE NOCTURNE - {current_hour}h{current_minute:02d}")
+            safe_log(f"   🌙 Trading fermé (horaires: 7h30 à 20h)")
+            safe_log(f"   ⏳ Reprise prévue à 7h30")
+        else:
+            self.is_trading_paused = False  # Démarre en mode actif
+            safe_log(f"🕐 DÉMARRAGE EN HEURES DE TRADING - {current_hour}h{current_minute:02d}")
+            safe_log(f"   ✅ Trading autorisé jusqu'à 20h")
         
         # État des positions
         self.open_positions = []
@@ -151,6 +177,9 @@ class UltraScalpingBot:
         
         # Initialisation du système de profit quotidien adaptatif
         self.initialize_daily_profit_system()
+        
+        # 🛡️ Initialisation de la balance de référence pour le filet de sécurité
+        self.initialize_balance_safety_system()
         
         # Synchronisation des compteurs de positions avec MT5
         self.sync_position_counters_with_mt5()
@@ -241,42 +270,6 @@ class UltraScalpingBot:
             safe_log(f"❌ Impossible d'activer {self.symbol}")
             return False
     
-    def initialize_mt5(self):
-        """Initialise MT5 pour ultra scalping"""
-        if not mt5.initialize():
-            safe_log("❌ Échec initialisation MT5")
-            return False
-        
-        # Connexion compte
-        if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
-            safe_log(f"❌ Échec connexion compte {MT5_LOGIN}")
-            safe_log(f"Erreur: {mt5.last_error()}")
-            mt5.shutdown()
-            return False
-        
-        safe_log("✅ MT5 initialisé pour ULTRA SCALPING")
-        
-        # Infos compte
-        account_info = mt5.account_info()
-        if account_info:
-            safe_log(f"💰 Balance: ${account_info.balance:.2f}")
-            safe_log(f"📊 Équité: ${account_info.equity:.2f}")
-        
-        # Activation symbole
-        if mt5.symbol_select(self.symbol, True):
-            safe_log(f"⚡ {self.symbol} activé pour ultra scalping")
-            
-            symbol_info = mt5.symbol_info(self.symbol)
-            if symbol_info:
-                safe_log(f"📊 Spread: {symbol_info.spread} points")
-                safe_log(f"📈 Ask: {symbol_info.ask}")
-                safe_log(f"📉 Bid: {symbol_info.bid}")
-                
-            return True
-        else:
-            safe_log(f"❌ Impossible d'activer {self.symbol}")
-            return False
-    
     def calculate_adaptive_lot_size(self):
         """Calcule la taille du lot adaptée à la balance du compte"""
         try:
@@ -318,6 +311,168 @@ class UltraScalpingBot:
             safe_log(f"❌ Erreur calcul lot adaptatif: {e}")
             return 0.01  # Valeur par défaut en cas d'erreur
     
+    def initialize_balance_safety_system(self):
+        """🛡️ Initialise le filet de sécurité basé sur la balance"""
+        try:
+            account_info = mt5.account_info()
+            if account_info:
+                self.initial_balance = account_info.balance
+                safety_threshold_amount = self.initial_balance * abs(self.balance_safety_threshold)
+                
+                safe_log(f"🛡️ FILET DE SÉCURITÉ BALANCE INITIALISÉ:")
+                safe_log(f"   💰 Balance de référence: {self.initial_balance:.2f}€")
+                safe_log(f"   🚨 Seuil critique: -5% = -{safety_threshold_amount:.2f}€")
+                safe_log(f"   📉 Balance critique: {self.initial_balance + (self.initial_balance * self.balance_safety_threshold):.2f}€")
+                safe_log(f"   🔄 Mode sécurité: Désactivé")
+            else:
+                safe_log("⚠️ Impossible d'initialiser le filet de sécurité balance")
+                self.initial_balance = 3000  # Valeur par défaut
+        except Exception as e:
+            safe_log(f"❌ Erreur initialisation filet sécurité: {e}")
+            self.initial_balance = 3000  # Valeur par défaut
+    
+    def check_balance_safety(self):
+        """🛡️ Vérifie si la perte atteint le seuil de -5% de la balance"""
+        try:
+            # Vérification et reset quotidien en premier
+            self.check_daily_reset()
+            
+            account_info = mt5.account_info()
+            if not account_info:
+                return
+            
+            current_balance = account_info.balance
+            balance_change = current_balance - self.initial_balance
+            balance_change_pct = (balance_change / self.initial_balance) * 100
+            
+            # Vérification du seuil critique (-5%)
+            if balance_change_pct <= (self.balance_safety_threshold * 100) and not self.stats['balance_safety_active']:
+                safe_log(f"🚨 ALERTE CRITIQUE - PERTE DE BALANCE ATTEINTE!")
+                safe_log(f"   💰 Balance initiale: {self.initial_balance:.2f}€")
+                safe_log(f"   📉 Balance actuelle: {current_balance:.2f}€")
+                safe_log(f"   📊 Perte: {balance_change:.2f}€ ({balance_change_pct:.2f}%)")
+                safe_log(f"   🚨 Seuil dépassé: {self.balance_safety_threshold * 100}%")
+                safe_log(f"🛡️ ACTIVATION DU FILET DE SÉCURITÉ")
+                self.activate_balance_safety_mode()
+            
+            # Log périodique de l'état de la balance (toutes les 30 vérifications)
+            if hasattr(self, '_balance_check_count'):
+                self._balance_check_count += 1
+            else:
+                self._balance_check_count = 1
+            
+            if self._balance_check_count % 30 == 0:  # Toutes les 30 vérifications (5 minutes)
+                safe_log(f"💰 Suivi balance: {current_balance:.2f}€ ({balance_change_pct:+.2f}%) | Seuil: -5%")
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur vérification balance: {e}")
+    
+    def activate_balance_safety_mode(self):
+        """🛡️ Active le mode sécurité basé sur la perte de balance"""
+        try:
+            self.stats['balance_safety_active'] = True
+            safe_log(f"🔒 ACTIVATION MODE SÉCURITÉ BALANCE")
+            safe_log(f"📋 Étapes:")
+            safe_log(f"   1️⃣ Suppression des SL sur toutes les positions ouvertes")
+            safe_log(f"   2️⃣ Pause du trading (pas de nouveaux trades)")
+            safe_log(f"   3️⃣ Fermeture automatique des positions profitables")
+            safe_log(f"   4️⃣ Attente que toutes les positions soient fermées")
+            safe_log(f"   5️⃣ Reprise automatique du trading")
+            
+            # Récupération des positions ouvertes
+            mt5_positions = mt5.positions_get(symbol=self.symbol)
+            if not mt5_positions:
+                safe_log(f"ℹ️ Aucune position ouverte à modifier")
+                return
+            
+            # Suppression des SL sur toutes les positions
+            removed_sl_count = 0
+            for position in mt5_positions:
+                if position.sl != 0:  # Si la position a un SL
+                    success = self.remove_stop_loss_from_position(position.ticket)
+                    if success:
+                        removed_sl_count += 1
+            
+            safe_log(f"✅ Mode sécurité balance activé!")
+            safe_log(f"   🔧 {removed_sl_count} Stop Loss supprimés")
+            safe_log(f"   ⏸️ Trading en PAUSE")
+            safe_log(f"   💡 Le bot ferme les profits et attend la fermeture complète")
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur activation mode sécurité balance: {e}")
+    
+    def check_balance_safety_exit_conditions(self):
+        """🛡️ Vérifie si les conditions de sortie du mode sécurité balance sont remplies"""
+        if not self.stats['balance_safety_active']:
+            return False
+        
+        # Récupération des positions ouvertes
+        mt5_positions = mt5.positions_get(symbol=self.symbol)
+        if not mt5_positions:
+            # Plus de positions ouvertes, on peut reprendre
+            safe_log(f"✅ SORTIE MODE SÉCURITÉ BALANCE - Aucune position ouverte")
+            safe_log(f"🔄 Reprise du trading normal")
+            safe_log(f"📊 Nouvelle balance de référence mise à jour")
+            
+            # Mise à jour de la balance de référence pour éviter re-déclenchement immédiat
+            account_info = mt5.account_info()
+            if account_info:
+                self.initial_balance = account_info.balance
+                safe_log(f"   💰 Nouvelle balance de référence: {self.initial_balance:.2f}€")
+            
+            self.stats['balance_safety_active'] = False
+            return True
+        
+        # Fermeture automatique des positions profitables
+        profitable_count = 0
+        losing_count = 0
+        closed_count = 0
+        
+        for position in mt5_positions:
+            if position.profit > 0:
+                profitable_count += 1
+                # Fermeture automatique de la position profitable
+                success = self.close_position_by_ticket(position.ticket)
+                if success:
+                    closed_count += 1
+                    safe_log(f"💰 Position fermée (mode sécurité balance): Ticket {position.ticket} | Profit: +{position.profit:.2f}€")
+            else:
+                losing_count += 1
+        
+        # Log du statut
+        if profitable_count > 0:
+            safe_log(f"🛡️ MODE SÉCURITÉ BALANCE - Fermeture positions profitables:")
+            safe_log(f"   ✅ Fermées: {closed_count}/{profitable_count}")
+            safe_log(f"   ❌ En attente: {losing_count}")
+        
+        # Vérification après fermetures
+        remaining_positions = mt5.positions_get(symbol=self.symbol)
+        if not remaining_positions:
+            safe_log(f"🎉 SORTIE MODE SÉCURITÉ BALANCE - Toutes les positions fermées!")
+            safe_log(f"🔄 Reprise du trading normal")
+            
+            # Mise à jour de la balance de référence
+            account_info = mt5.account_info()
+            if account_info:
+                self.initial_balance = account_info.balance
+                safe_log(f"   💰 Nouvelle balance de référence: {self.initial_balance:.2f}€")
+            
+            self.stats['balance_safety_active'] = False
+            return True
+        else:
+            # Log périodique du statut
+            if hasattr(self, '_balance_safety_check_count'):
+                self._balance_safety_check_count += 1
+            else:
+                self._balance_safety_check_count = 1
+            
+            if self._balance_safety_check_count % 10 == 0:  # Toutes les 10 vérifications
+                safe_log(f"🛡️ MODE SÉCURITÉ BALANCE ACTIF - Attente fermeture:")
+                safe_log(f"   📊 Positions restantes: {len(remaining_positions)}")
+                safe_log(f"   ⏳ Fermeture automatique des profits en cours...")
+            
+            return False
+    
     def initialize_daily_profit_system(self):
         """Initialise le système de profit quotidien au démarrage ou nouveau jour"""
         try:
@@ -329,20 +484,19 @@ class UltraScalpingBot:
             current_balance = account_info.balance
             today = datetime.now().date()
             
-            # Sauvegarde de la balance de départ du jour
+            # 🎯 IMPORTANT: Balance de départ du jour pour calcul profit quotidien
             self.daily_start_balance = current_balance
             
-            # Reset des stats quotidiennes
+            # Reset des stats quotidiennes  
             self.stats['daily_start'] = today
-            self.stats['daily_profit'] = 0
-            self.stats['daily_sl_count'] = 0  # Reset compteur SL
-            self.stats['safety_mode_active'] = False  # Reset mode sécurité
+            self.stats['daily_profit'] = 0  # Remis à zéro (mais on utilise calculate_real_time_daily_profit)
+            # Note: Le système de sécurité est maintenant basé sur la balance (-5%)
             
             safe_log(f"🌅 SYSTÈME PROFIT QUOTIDIEN INITIALISÉ:")
             safe_log(f"   📅 Date: {today.strftime('%d/%m/%Y')}")
-            safe_log(f"   💰 Balance de départ: {self.daily_start_balance:.2f}€")
-            safe_log(f"   🛡️ Compteur SL: 0/10 (reset)")
-            safe_log(f"   🔄 Mode sécurité: Désactivé")
+            safe_log(f"   💰 Balance de départ du jour: {self.daily_start_balance:.2f}€")
+            safe_log(f"   📊 Profit quotidien sera: Balance actuelle - {self.daily_start_balance:.2f}€")
+            safe_log(f"   🛡️ Filet de sécurité: Balance (-5%)")
             
         except Exception as e:
             safe_log(f"❌ Erreur initialisation système profit quotidien: {e}")
@@ -356,10 +510,10 @@ class UltraScalpingBot:
             
             current_balance = account_info.balance
             
-            # Simple calcul: Balance actuelle - Balance de départ = Profit/Perte de la journée
-            current_profit = current_balance - self.daily_start_balance
+            # 🎯 CALCUL CORRECT: Balance actuelle - Balance de départ du jour
+            daily_profit = current_balance - self.daily_start_balance
             
-            return current_profit
+            return daily_profit
             
         except Exception as e:
             safe_log(f"❌ Erreur calcul profit temps réel: {e}")
@@ -368,6 +522,11 @@ class UltraScalpingBot:
     def place_real_order(self, trade_type, entry_price, tp_price, sl_price, signal):
         """Place un ordre réel sur MT5"""
         try:
+            # 🕐 Vérification horaires de trading avant de placer un ordre
+            if not self.check_trading_hours():
+                safe_log(f"🚫 Ordre refusé - Trading fermé (horaires: 7h30 à 20h)")
+                return False
+            
             # Vérification connexion MT5
             if not mt5.terminal_info():
                 safe_log("❌ MT5 non connecté")
@@ -541,8 +700,7 @@ class UltraScalpingBot:
                         safe_log(f"✅ Position fermée (TP): Ticket {position['ticket']} | Profit: {profit:+.2f}€ | Durée: {duration_str}")
                     elif close_type == 'SL':
                         safe_log(f"❌ Position fermée (SL): Ticket {position['ticket']} | Perte: {profit:+.2f}€ | Durée: {duration_str}")
-                        # 🛡️ FILET DE SÉCURITÉ - Comptage des SL
-                        self.handle_stop_loss_detected()
+                        # Note: Le filet de sécurité est maintenant basé sur la balance (-5%)
                     else:
                         safe_log(f"🔄 Position fermée: Ticket {position['ticket']} | P&L: {profit:+.2f}€ | Durée: {duration_str}")
                 else:
@@ -559,20 +717,32 @@ class UltraScalpingBot:
         for i in reversed(positions_to_remove):
             self.open_positions.pop(i)
     
-    def handle_stop_loss_detected(self):
-        """🛡️ FILET DE SÉCURITÉ - Gestion des Stop Loss détectés"""
-        # Vérification si c'est un nouveau jour
-        today = datetime.now().date()
-        if self.stats['daily_start'] != today:
-            # Reset du compteur pour le nouveau jour
-            safe_log(f"🌅 Nouveau jour - Reset compteur SL")
-            self.stats['daily_start'] = today
-            self.stats['daily_sl_count'] = 0
-            self.stats['safety_mode_active'] = False
+    def reset_daily_sl_counter(self):
+        """🔄 Reset manuel du compteur de SL quotidien (OBSOLÈTE - utilise maintenant balance)"""
+        safe_log(f"⚠️ FONCTION OBSOLÈTE - Le filet de sécurité est maintenant basé sur la balance (-5%)")
+        safe_log(f"   💡 Aucune action nécessaire - Le système balance est actif")
+    
+    def get_sl_detection_stats(self):
+        """� Affiche les statistiques du nouveau système de sécurité balance"""
+        safe_log(f"� NOUVEAU SYSTÈME DE SÉCURITÉ BALANCE:")
+        safe_log(f"   🛡️ Mode sécurité: {'Activé' if self.stats['balance_safety_active'] else 'Désactivé'}")
+        safe_log(f"   � Balance de référence: {self.initial_balance:.2f}€")
+        safe_log(f"   � Seuil critique: -5% = {self.initial_balance * 0.05:.2f}€")
         
-        # Incrémentation du compteur de SL
-        self.stats['daily_sl_count'] += 1
-        safe_log(f"🔴 STOP LOSS #{self.stats['daily_sl_count']}/10 détecté")
+        # Affichage balance actuelle
+        try:
+            account_info = mt5.account_info()
+            if account_info:
+                current_balance = account_info.balance
+                balance_change_pct = ((current_balance - self.initial_balance) / self.initial_balance) * 100
+                safe_log(f"   📊 Balance actuelle: {current_balance:.2f}€ ({balance_change_pct:+.2f}%)")
+        except Exception as e:
+            safe_log(f"   ❌ Erreur lecture balance: {e}")
+    
+    def handle_stop_loss_detected(self):
+        """🛡️ FILET DE SÉCURITÉ - Gestion basique d'un SL détecté (fonction simplifiée)"""
+        # Cette fonction est maintenant simplifiée car la logique principale 
+        # est dans check_for_new_stop_losses()
         
         # Vérification du seuil critique (10 SL)
         if self.stats['daily_sl_count'] >= 10 and not self.stats['safety_mode_active']:
@@ -857,6 +1027,266 @@ class UltraScalpingBot:
         
         return data
     
+    def force_daily_reset_now(self):
+        """🔄 Force un reset quotidien immédiat (utile pour corriger les erreurs)"""
+        safe_log(f"🔄 RESET FORCÉ DEMANDÉ")
+        # On force la date à être différente pour déclencher le reset
+        self.stats['daily_start'] = datetime.now().date() - timedelta(days=1)
+        # Puis on appelle le reset quotidien
+        self.check_daily_reset()
+        safe_log(f"✅ Reset forcé terminé - Système réinitialisé")
+
+    def check_daily_reset(self):
+        """🌅 Vérification et reset quotidien complet (balance + SL + tous les systèmes)"""
+        try:
+            today = datetime.now().date()
+            force_reset = self.force_reset_requested if hasattr(self, 'force_reset_requested') else False
+            
+            # 🎯 DÉTECTION AUTOMATIQUE DU BESOIN DE RESET
+            account_info = mt5.account_info()
+            needs_reset = False
+            reset_reason = ""
+            
+            # Condition 1: Nouveau jour
+            if self.stats['daily_start'] != today:
+                needs_reset = True
+                reset_reason = "NOUVEAU JOUR DÉTECTÉ"
+            
+            # Condition 2: Reset forcé au démarrage
+            elif force_reset:
+                needs_reset = True
+                reset_reason = "RESET FORCÉ DEMANDÉ AU DÉMARRAGE"
+            
+            # Condition 3: Balance de référence aberrante (différence > 20% par rapport à la balance actuelle)
+            elif account_info and self.initial_balance > 0:
+                current_balance = account_info.balance
+                balance_diff_pct = abs((current_balance - self.initial_balance) / self.initial_balance * 100)
+                if balance_diff_pct > 20:  # Si la différence est trop importante
+                    needs_reset = True
+                    reset_reason = f"BALANCE DE RÉFÉRENCE ABERRANTE ({balance_diff_pct:.1f}% de différence)"
+            
+            if needs_reset:
+                safe_log(f"🔄 {reset_reason} - RESET COMPLET")
+                safe_log(f"   📅 Ancien jour: {self.stats['daily_start']}")
+                safe_log(f"   📅 Nouveau jour: {today}")
+                
+                # 1. Reset date de référence
+                self.stats['daily_start'] = today
+                
+                # 2. Reset système SL (ancien système, conservé pour compatibilité)
+                if hasattr(self, 'stats') and 'daily_sl_count' in self.stats:
+                    self.stats['daily_sl_count'] = 0
+                    self.stats['safety_mode_active'] = False
+                
+                # 3. Reset tickets traités SL
+                if hasattr(self, 'processed_tickets'):
+                    self.processed_tickets.clear()
+                
+                # 4. 🎯 RESET BALANCE DE RÉFÉRENCE (le plus important!)
+                if account_info:
+                    old_initial_balance = self.initial_balance
+                    old_daily_start_balance = self.daily_start_balance
+                    
+                    # Mise à jour des balances de référence avec la balance actuelle
+                    self.initial_balance = account_info.balance
+                    self.daily_start_balance = account_info.balance
+                    
+                    safe_log(f"💰 RESET BALANCE DE RÉFÉRENCE:")
+                    safe_log(f"   📊 Ancienne balance de référence: {old_initial_balance:.2f}€")
+                    safe_log(f"   📊 Nouvelle balance de référence: {self.initial_balance:.2f}€")
+                    safe_log(f"   🎯 Nouveau seuil -5%: {self.initial_balance * 0.05:.2f}€")
+                    safe_log(f"💰 RESET BALANCE DE DÉPART QUOTIDIENNE:")
+                    safe_log(f"   📊 Ancienne balance de départ: {old_daily_start_balance:.2f}€")
+                    safe_log(f"   📊 Nouvelle balance de départ: {self.daily_start_balance:.2f}€")
+                    safe_log(f"   🔄 Profit quotidien remis à zéro")
+                
+                # 5. Reset mode sécurité balance
+                self.stats['balance_safety_active'] = False
+                
+                # 6. Reset profit quotidien
+                self.stats['daily_profit'] = 0
+                if hasattr(self, 'bot_trades_profit'):
+                    self.bot_trades_profit = 0
+                if hasattr(self, 'manual_daily_profit'):
+                    self.manual_daily_profit = None
+                
+                # 7. Reset du flag de reset forcé
+                if hasattr(self, 'force_reset_requested'):
+                    self.force_reset_requested = False
+                
+                # 8. 🕐 Reset pause nocturne (reprendre le trading à 7h30)
+                self.is_trading_paused = False
+                
+                safe_log(f"✅ RESET AUTOMATIQUE TERMINÉ - Système réinitialisé!")
+                safe_log(f"🛡️ Système de sécurité balance opérationnel")
+                safe_log(f"🕐 Trading actif de 7h30 à 20h")
+                
+        except Exception as e:
+            safe_log(f"❌ Erreur reset quotidien: {e}")
+
+    def check_trading_hours(self):
+        """🕐 Vérifie les horaires de trading et gère la fermeture automatique à 20h et reprise à 7h30"""
+        try:
+            current_time = datetime.now()
+            current_hour = current_time.hour
+            current_minute = current_time.minute
+            current_time_decimal = current_hour + (current_minute / 60.0)  # Conversion en décimal pour 7h30 = 7.5
+            
+            # Vérification si on doit fermer à 20h
+            if current_time_decimal >= self.daily_close_time and not self.is_trading_paused:
+                safe_log(f"🕐 FERMETURE AUTOMATIQUE - {current_hour}h{current_minute:02d} atteinte")
+                safe_log(f"📋 Actions:")
+                safe_log(f"   1️⃣ Fermeture de toutes les positions ouvertes")
+                safe_log(f"   2️⃣ Pause du trading jusqu'à 7h30")
+                
+                # Fermeture de toutes les positions
+                closed_count = self.close_all_positions_end_day()
+                
+                # Activation de la pause nocturne
+                self.is_trading_paused = True
+                
+                safe_log(f"✅ FERMETURE QUOTIDIENNE TERMINÉE:")
+                safe_log(f"   📊 {closed_count} positions fermées")
+                safe_log(f"   ⏸️ Trading en PAUSE jusqu'à 7h30")
+                safe_log(f"   🌙 Repos nocturne activé")
+                
+                return False  # Trading arrêté
+            
+            # Vérification si on peut reprendre à 7h30
+            elif current_time_decimal >= self.daily_start_time and current_time_decimal < self.daily_close_time and self.is_trading_paused:
+                safe_log(f"🌅 REPRISE DU TRADING - 7h30 atteinte")
+                safe_log(f"   🕐 Heure actuelle: {current_hour}h{current_minute:02d}")
+                safe_log(f"   ✅ Trading autorisé jusqu'à {self.daily_close_time}h")
+                
+                # Désactivation de la pause nocturne
+                self.is_trading_paused = False
+                
+                return True  # Trading autorisé
+            
+            # Vérification si on est en période de pause (20h à 7h30)
+            elif self.is_trading_paused or current_time_decimal < self.daily_start_time or current_time_decimal >= self.daily_close_time:
+                # Log périodique pendant la pause (toutes les 100 vérifications = ~16 minutes)
+                if not hasattr(self, '_pause_log_count'):
+                    self._pause_log_count = 0
+                
+                self._pause_log_count += 1
+                if self._pause_log_count % 100 == 0:
+                    safe_log(f"🌙 PAUSE NOCTURNE - {current_hour}h{current_minute:02d} | Reprise à 7h30")
+                
+                return False  # Trading en pause
+            
+            # Trading normal autorisé (entre 7h30 et 20h)
+            return True
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur vérification horaires: {e}")
+            return True  # En cas d'erreur, on autorise le trading
+    
+    def close_all_positions_end_day(self):
+        """Ferme toutes les positions ouvertes en fin de journée"""
+        try:
+            # Récupération des positions ouvertes
+            mt5_positions = mt5.positions_get(symbol=self.symbol)
+            if not mt5_positions:
+                safe_log("📊 Aucune position ouverte à fermer")
+                return 0
+            
+            safe_log(f"🔄 Fermeture de {len(mt5_positions)} positions en fin de journée...")
+            closed_count = 0
+            total_profit = 0
+            
+            for position in mt5_positions:
+                # Fermeture de la position
+                success = self.close_position_by_ticket(position.ticket)
+                if success:
+                    closed_count += 1
+                    total_profit += position.profit
+                    position_type = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
+                    safe_log(f"   ✅ {position_type} fermé: Ticket {position.ticket} | P&L: {position.profit:+.2f}€")
+                else:
+                    safe_log(f"   ❌ Échec fermeture: Ticket {position.ticket}")
+            
+            # Mise à jour du profit quotidien
+            if total_profit != 0:
+                self.update_daily_profit(total_profit)
+                safe_log(f"💰 Profit de fermeture: {total_profit:+.2f}€")
+            
+            safe_log(f"🏁 BILAN FERMETURE QUOTIDIENNE:")
+            safe_log(f"   📊 Positions fermées: {closed_count}/{len(mt5_positions)}")
+            safe_log(f"   💰 P&L total: {total_profit:+.2f}€")
+            
+            return closed_count
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur fermeture fin de journée: {e}")
+            return 0
+
+    def check_for_new_stop_losses(self):
+        """🔍 Méthode alternative - Vérifie les nouveaux SL directement depuis l'historique MT5"""
+        try:
+            # Vérification et reset quotidien complet
+            self.check_daily_reset()
+            
+            # Récupération historique des deals de la journée (seulement les 2 dernières heures pour éviter trop de données)
+            from_date = datetime.now() - timedelta(hours=2)
+            to_date = datetime.now()
+            
+            deals = mt5.history_deals_get(from_date, to_date, symbol=self.symbol)
+            if not deals:
+                return
+            
+            # Comptage UNIQUEMENT des nouveaux SL (pas déjà traités)
+            new_sl_count = 0
+            
+            for deal in deals:
+                # On ne regarde que les deals de sortie (fermeture)
+                if deal.entry != mt5.DEAL_ENTRY_OUT:
+                    continue
+                
+                # Vérifier si ce ticket est déjà traité
+                if deal.position_id in self.processed_tickets:
+                    continue  # Ignorer, déjà traité
+                
+                # Vérification STRICTE si c'est un vrai SL
+                comment = deal.comment.lower() if deal.comment else ""
+                is_sl = False
+                
+                # 1. SEULEMENT si commentaire contient explicitement "sl" ou "stop"
+                if ("sl" in comment and not "breakeven" in comment) or "stop" in comment:
+                    is_sl = True
+                
+                # 2. OU perte TRÈS significative (plus strict: > 50€)
+                elif deal.profit < -50.0:
+                    is_sl = True
+                    safe_log(f"🔍 SL détecté par perte importante: {deal.profit:.2f}€")
+                
+                if is_sl:
+                    # Nouveau SL trouvé
+                    self.processed_tickets.add(deal.position_id)
+                    new_sl_count += 1
+                    self.stats['daily_sl_count'] += 1
+                    
+                    safe_log(f"🔴 NOUVEAU SL #{self.stats['daily_sl_count']}/10:")
+                    safe_log(f"   📋 Ticket: {deal.position_id}")
+                    safe_log(f"   💰 Perte: {deal.profit:.2f}€")
+                    safe_log(f"   📝 Commentaire: '{deal.comment}'")
+                    safe_log(f"   ⏰ Heure: {datetime.fromtimestamp(deal.time)}")
+                    
+                    # Vérification seuil critique
+                    if self.stats['daily_sl_count'] >= 10 and not self.stats['safety_mode_active']:
+                        safe_log(f"� SEUIL CRITIQUE ATTEINT: {self.stats['daily_sl_count']} SL!")
+                        self.activate_safety_mode()
+                        break  # Sortir de la boucle une fois le mode sécurité activé
+            
+            # Log seulement s'il y a de nouveaux SL
+            if new_sl_count > 0:
+                safe_log(f"� {new_sl_count} nouveaux SL détectés - Total: {self.stats['daily_sl_count']}/10")
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur vérification SL: {e}")
+            import traceback
+            safe_log(f"📋 Traceback: {traceback.format_exc()}")
+    
     def get_detailed_position_profit_from_history(self, ticket):
         """Récupère le profit détaillé d'une position depuis l'historique des deals"""
         try:
@@ -877,31 +1307,33 @@ class UltraScalpingBot:
                     # Déterminer le type de fermeture plus précisément
                     comment = last_exit_deal.comment.lower() if last_exit_deal.comment else ""
                     
-                    # Logique améliorée de détection SL/TP
+                    # Logique stricte de détection SL/TP
                     close_type = "MANUAL"  # Par défaut
                     
-                    # 1. D'abord vérifier le commentaire
-                    if "tp" in comment or "take profit" in comment:
+                    # 1. D'abord vérifier le commentaire MT5 (plus fiable)
+                    if "tp" in comment or "take profit" in comment or "[tp]" in comment:
                         close_type = "TP"
-                    elif "sl" in comment or "stop loss" in comment:
+                    elif "sl" in comment or "stop loss" in comment or "[sl]" in comment:
                         close_type = "SL"
                     else:
-                        # 2. Si commentaire peu fiable, analyser le profit ET la raison
-                        # Pour les SELL: TP = profit positif, SL = profit négatif
-                        # Pour les BUY: TP = profit positif, SL = profit négatif
-                        if total_profit > 0.05:  # Seuil minimum pour TP
+                        # 2. Logique stricte basée sur le profit pour éviter les faux positifs
+                        # Un vrai SL doit être une perte significative (pas juste -0.05€)
+                        if total_profit > 5.0:  # TP: profit significatif > 5€
                             close_type = "TP"
-                        elif total_profit < -0.05:  # Seuil minimum pour SL
+                        elif total_profit < -10.0:  # SL: perte significative > 10€
                             close_type = "SL"
                         else:
-                            # 3. Profit très faible, analyser plus finement
-                            close_type = "BREAKEVEN"
+                            # 3. Profit/perte faible = fermeture manuelle ou breakeven
+                            if abs(total_profit) <= 1.0:  # Très proche de 0
+                                close_type = "BREAKEVEN"
+                            else:
+                                close_type = "MANUAL"  # Fermeture manuelle
                     
                     safe_log(f"🔍 Debug profit détaillé - Ticket {ticket}:")
                     safe_log(f"   💰 Profit brut: {total_profit:.2f}€")
                     safe_log(f"   📝 Commentaire MT5: '{comment}'")
                     safe_log(f"   🎯 Type final: {close_type}")
-                    safe_log(f"   ⚖️ Logique: {'Profit > 0.05' if total_profit > 0.05 else 'Perte < -0.05' if total_profit < -0.05 else 'Neutre'}")
+                    safe_log(f"   ⚖️ Logique: {'TP (>5€)' if total_profit > 5.0 else 'SL (<-10€)' if total_profit < -10.0 else 'BREAKEVEN/MANUAL'}")
                     
                     return {
                         'profit': total_profit,
@@ -913,7 +1345,8 @@ class UltraScalpingBot:
                     total_profit = sum(deal.profit for deal in deals)
                     safe_log(f"🔍 Debug profit (fallback) - Ticket {ticket}: {total_profit:.2f}€")
                     
-                    close_type = "SL" if total_profit < -0.05 else "TP" if total_profit > 0.05 else "BREAKEVEN"
+                    # Logique stricte pour le fallback aussi
+                    close_type = "SL" if total_profit < -10.0 else "TP" if total_profit > 5.0 else "MANUAL"
                     return {
                         'profit': total_profit,
                         'type': close_type,
@@ -1113,8 +1546,8 @@ class UltraScalpingBot:
         current_time = datetime.now()
         current_rsi = indicators['rsi']
         
-        # 🛡️ FILET DE SÉCURITÉ - Vérification mode sécurité
-        if self.stats['safety_mode_active']:
+        # 🛡️ NOUVEAU FILET DE SÉCURITÉ - Vérification mode sécurité balance
+        if self.stats['balance_safety_active']:
             return None  # Pas de nouveaux trades en mode sécurité
         
         # Vérification limites globales
@@ -1260,9 +1693,16 @@ class UltraScalpingBot:
     def run_ultra_scalping_cycle(self):
         """Exécute un cycle d'analyse du marché (toutes les 10 secondes)"""
         
+        # � VÉRIFICATION HORAIRES DE TRADING (20h fermeture, minuit reprise)
+        if not self.check_trading_hours():
+            return  # Trading en pause nocturne
+        
+        # �🛡️ NOUVEAU FILET DE SÉCURITÉ - Vérification perte de balance (-5%)
+        self.check_balance_safety()
+        
         # 🛡️ FILET DE SÉCURITÉ - Vérification des conditions de sortie du mode sécurité
-        if self.stats['safety_mode_active']:
-            self.check_safety_mode_exit_conditions()
+        if self.stats['balance_safety_active']:
+            self.check_balance_safety_exit_conditions()
         
         # Récupération données ultra rapides
         df = self.get_ultra_fast_data()
@@ -1281,11 +1721,23 @@ class UltraScalpingBot:
         current_profit = self.calculate_real_time_daily_profit()
         daily_status = f"💰{current_profit:+.1f}€"
         
-        # 🛡️ Ajout du statut de sécurité
-        if self.stats['safety_mode_active']:
-            safety_status = f"🛡️SÉCURITÉ({self.stats['daily_sl_count']}/10 SL)"
+        # 🛡️ NOUVEAU statut de sécurité basé sur la balance
+        if self.stats['balance_safety_active']:
+            account_info = mt5.account_info()
+            if account_info:
+                current_balance = account_info.balance
+                balance_change_pct = ((current_balance - self.initial_balance) / self.initial_balance) * 100
+                safety_status = f"🛡️SÉCURITÉ({balance_change_pct:.1f}%)"
+            else:
+                safety_status = f"🛡️SÉCURITÉ ACTIVE"
         else:
-            safety_status = f"SL:{self.stats['daily_sl_count']}/10"
+            account_info = mt5.account_info()
+            if account_info and self.initial_balance > 0:
+                current_balance = account_info.balance
+                balance_change_pct = ((current_balance - self.initial_balance) / self.initial_balance) * 100
+                safety_status = f"Perte:{balance_change_pct:.1f}%/-5%"
+            else:
+                safety_status = f"Balance:OK"
             
         # Calcul cooldown restant adaptatif selon la tendance
         current_time = datetime.now()
@@ -1308,7 +1760,7 @@ class UltraScalpingBot:
         safe_log(f"📊 ${current_price:.2f} | {trend} {strength:.3f}% | RSI:{indicators['rsi']:.1f} | Positions:{open_positions_count} | {cooldown_status} | {safety_status} | {daily_status}")
         
         # Vérification signal BUY uniquement (seulement si pas en mode sécurité)
-        if not self.stats['safety_mode_active']:
+        if not self.stats['balance_safety_active']:
             signal = self.should_open_position(trend, strength, indicators)
             
             if signal:
@@ -1317,6 +1769,14 @@ class UltraScalpingBot:
                 safe_log(f"🔥 SIGNAL {signal_type}: {reason} détecté avec {trend}")
                 self.execute_ultra_scalp_trade(signal, current_price)
         else:
+            # En mode sécurité, on affiche un message périodique
+            if hasattr(self, '_balance_safety_message_count'):
+                self._balance_safety_message_count += 1
+            else:
+                self._balance_safety_message_count = 1
+            
+            if self._balance_safety_message_count % 30 == 0:  # Toutes les 5 minutes
+                safe_log(f"🛡️ MODE SÉCURITÉ BALANCE ACTIF - Trading en pause jusqu'à fermeture complète")
             # En mode sécurité, on affiche un message périodique
             if hasattr(self, '_safety_message_count'):
                 self._safety_message_count += 1
@@ -1521,7 +1981,7 @@ def main():
             safe_log("❌ Choix invalide, test 10 minutes")
             duration = 10
         
-        # Lancement du bot
+        # Lancement du bot (reset automatique intégré)
         bot = UltraScalpingBot(manual_daily_profit=manual_profit)
         
         try:
