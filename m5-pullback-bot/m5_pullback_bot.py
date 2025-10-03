@@ -89,10 +89,15 @@ USE_SIMULATION_MODE = False  # ❌ MODE SIMULATION DÉSACTIVÉ
 # Paramètres stratégie M5 PULLBACK PROFESSIONNELLE - ARGENT RÉEL
 SYMBOL = "XAUUSD"               # Or (excellent pour stratégie pullback)
 TIMEFRAME = mt5.TIMEFRAME_M5    # 🕒 5 minutes (qualité > quantité)
-LOT_SIZE = 0.01                 # ⚠️ LOT MINIMAL RECOMMANDÉ EN ARGENT RÉEL
+LOT_SIZE = "ADAPTIVE"           # 🚀 LOT ADAPTATIF AGRESSIF (3.5% risque par trade)
 USE_STOP_LOSS = True            # ✅ STOP LOSS OBLIGATOIRE EN ARGENT RÉEL
 MAX_POSITIONS = 50              # 🔒 OBSOLÈTE - Remplacé par calcul adaptatif selon balance
 ANALYSIS_INTERVAL = 60          # 🕒 Analyse toutes les 60 secondes (M5 = moins de bruit)
+
+# 🚀 GESTION LOT ADAPTATIF AGRESSIF
+ADAPTIVE_LOT_RISK_PERCENT = 3.5 # Risque 3.5% par trade (agressif mais sécurisé par -5% balance)
+ADAPTIVE_LOT_MIN = 0.01         # Lot minimum (contrainte broker)
+ADAPTIVE_LOT_MAX = 1.0          # Lot maximum (sécurité anti-explosion)
 
 # 🎯 NOUVEAUX PARAMÈTRES STRATÉGIE M5 PULLBACK
 TREND_EMA_MASTER = 200          # EMA 200 - Juge de paix pour tendance de fond
@@ -100,8 +105,8 @@ TREND_EMA_PULLBACK = 50         # EMA 50 - Zone de repli/rebond dynamique
 ATR_PERIOD = 14                 # ATR pour TP/SL adaptatifs selon volatilité
 RSI_PERIOD = 14                 # RSI standard (14 périodes)
 
-# 🎯 SEUILS PULLBACK INTELLIGENTS
-ATR_PULLBACK_MULTIPLIER = 0.25  # Distance max à l'EMA 50 (25% de l'ATR)
+# 🎯 SEUILS PULLBACK INTELLIGENTS (Ajustés pour plus de sensibilité)
+ATR_PULLBACK_MULTIPLIER = 4.5   # Distance max à l'EMA 50 (4.5x ATR - plus sensible pour plus d'opportunités)
 ATR_SL_MULTIPLIER = 1.5         # Stop Loss à 1.5x ATR
 ATR_TP_RATIO = 2.0              # Take Profit à 2x le SL (ratio 1:2)
 
@@ -368,29 +373,6 @@ class M5PullbackBot:
             safe_log(f"❌ Impossible d'activer {self.symbol}")
             return False
     
-    def calculate_adaptive_lot_size(self):
-        """Calcule la taille du lot adaptée à la balance RÉELLE du compte"""
-        try:
-            account_info = mt5.account_info()
-            if not account_info:
-                safe_log("⚠️ Impossible de récupérer les infos compte, lot par défaut: 0.01")
-                return 0.01
-            
-            # 🚨 MODE ARGENT RÉEL - Utilisation balance réelle uniquement
-            balance = account_info.balance
-            
-            # Logique adaptative: +0.01 par tranche de 1000€ jusqu'à 0.10 max
-            tranche = int(balance / 1000)  # Nombre de tranches de 1000€
-            lot_size = max(0.01, tranche * 0.01)  # Minimum 0.01
-            lot_size = min(lot_size, 100)  # Maximum 100 lots
-
-            safe_log(f"🚨 ARGENT RÉEL: Balance {balance:.2f}€ → Tranche {tranche} → Lot: {lot_size}")
-            return lot_size
-            
-        except Exception as e:
-            safe_log(f"❌ Erreur calcul lot adaptatif: {e}")
-            return 0.01  # Valeur par défaut en cas d'erreur
-
     def calculate_adaptive_max_positions(self):
         """🧮 Calcule le nombre maximum de positions basé sur la balance et le seuil de sécurité"""
         try:
@@ -698,8 +680,10 @@ class M5PullbackBot:
             # Type d'ordre
             order_type = mt5.ORDER_TYPE_SELL if trade_type == "SELL" else mt5.ORDER_TYPE_BUY
             
-            # Volume (lot size adaptatif basé sur la balance RÉELLE)
-            volume = self.calculate_adaptive_lot_size()
+            # Volume (lot size adaptatif basé sur la balance RÉELLE et l'ATR)
+            # Calcul de la distance SL basée sur l'ATR pour le lot adaptatif
+            atr_sl_distance = signal.get('atr', 2.5) * ATR_SL_MULTIPLIER  # Fallback ATR 2.5 pour XAUUSD
+            volume = self.calculate_adaptive_lot_size(atr_sl_distance)
             
             # Vérification du symbole
             symbol_info = mt5.symbol_info(self.symbol)
@@ -1942,6 +1926,55 @@ class M5PullbackBot:
             ema.append(ema_value)
         
         return ema
+    
+    def calculate_adaptive_lot_size(self, atr_sl_distance):
+        """
+        🚀 CALCUL LOT ADAPTATIF AGRESSIF - Risque 3.5% par trade
+        =======================================================
+        
+        Approche agressive mais sécurisée:
+        - Risque 3.5% de la balance par trade (vs 1-2% standard)
+        - Sécurité garantie par l'arrêt automatique à -5% balance
+        - Maximum 1.4 trades perdants avant déclenchement sécurité
+        
+        Args:
+            atr_sl_distance: Distance du Stop Loss basée sur l'ATR
+            
+        Returns:
+            float: Taille de lot optimale (0.01 à 1.0)
+        """
+        try:
+            # Récupération de la balance actuelle
+            account_info = mt5.account_info()
+            if not account_info:
+                safe_log("⚠️ Impossible de récupérer la balance - Lot par défaut: 0.01")
+                return 0.01
+            
+            current_balance = account_info.balance
+            
+            # Calcul du risque maximal par trade (3.5% agressif)
+            max_loss_per_trade = current_balance * (ADAPTIVE_LOT_RISK_PERCENT / 100)
+            
+            # Calcul du lot nécessaire
+            # Pour XAUUSD: 1 lot = 100$/point, donc lot = max_loss / (sl_distance * 100)
+            lot_size = max_loss_per_trade / (atr_sl_distance * 100)
+            
+            # Arrondi et sécurités
+            lot_size = round(lot_size, 2)
+            lot_size = max(lot_size, ADAPTIVE_LOT_MIN)  # Minimum broker
+            lot_size = min(lot_size, ADAPTIVE_LOT_MAX)  # Maximum sécurité
+            
+            # Log informatif
+            profit_potential = max_loss_per_trade * 2  # Ratio 1:2
+            safe_log(f"🚀 LOT ADAPTATIF: Balance ${current_balance:.0f} → Lot {lot_size:.2f}")
+            safe_log(f"   💰 Risque: -${max_loss_per_trade:.0f} | Profit potentiel: +${profit_potential:.0f}")
+            
+            return lot_size
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur calcul lot adaptatif: {e}")
+            safe_log("   🔄 Utilisation lot par défaut: 0.01")
+            return 0.01
     
     def get_higher_timeframe_trend(self):
         """🎯 FILTRE TENDANCE SUPÉRIEURE : EMA 200 sur M5 pour direction majeure"""
