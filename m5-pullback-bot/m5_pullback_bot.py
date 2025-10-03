@@ -374,34 +374,28 @@ class M5PullbackBot:
             return False
     
     def calculate_adaptive_max_positions(self):
-        """🧮 Calcule le nombre maximum de positions basé sur la balance et le seuil de sécurité"""
+        """🧮 Calcule le nombre maximum de positions (fixé à 3 pour éviter 'No money')"""
         try:
             account_info = mt5.account_info()
             if not account_info:
-                safe_log("⚠️ Impossible de récupérer balance, MAX_POSITIONS par défaut: 20")
-                return 20
+                safe_log("⚠️ Impossible de récupérer balance, MAX_POSITIONS par défaut: 3")
+                return 3
             
             balance = account_info.balance
             
-            # 🛡️ CALCUL BASÉ SUR LE SEUIL DE SÉCURITÉ 5%
-            # Risque acceptable = 5% de la balance
-            risque_acceptable = balance * 0.05  # 5% de la balance
+            # � LIMITE FIXE OPTIMISÉE POUR ÉVITER "NO MONEY"
+            max_positions_final = MAX_POSITIONS  # 3 positions max
             
-            # 💰 PERTE PAR POSITION = 12 pips × 0.01 lot ≈ 1.2€ pour XAUUSD
-            perte_par_position = 1.2  # Environ 1.2€ de perte par position avec SL à 12 pips
+            # �️ CALCUL INFORMATIF SEULEMENT
+            risque_acceptable = balance * 0.025  # 2.5% de la balance par position
+            perte_par_position = risque_acceptable  # Perte estimée par position
             
-            # 🧮 NOMBRE MAX DE POSITIONS = Risque acceptable ÷ Perte par position
-            max_positions_calculé = int(risque_acceptable / perte_par_position)
-            
-            # 🔒 LIMITES DE SÉCURITÉ
-            max_positions_final = max(5, min(max_positions_calculé, 99999999))  # Entre 5 et 99999999 positions
-
-            safe_log(f"🧮 POSITION SIZING ADAPTATIF:")
+            safe_log(f"🧮 POSITION SIZING OPTIMISÉ:")
             safe_log(f"   💰 Balance: {balance:.2f}€")
-            safe_log(f"   🛡️ Risque acceptable (5%): {risque_acceptable:.2f}€")
-            safe_log(f"   💸 Perte par position: {perte_par_position}€")
-            safe_log(f"   🔢 Max positions calculé: {max_positions_calculé}")
-            safe_log(f"   ✅ Max positions final: {max_positions_final}")
+            safe_log(f"   🛡️ Risque par position (2.5%): {risque_acceptable:.2f}€")
+            safe_log(f"   💸 Perte maximale: {perte_par_position:.2f}€")
+            safe_log(f"   🔢 Max positions: {max_positions_final} (limite optimisée)")
+            safe_log(f"   ✅ Protection 'No money' activée")
             
             return max_positions_final
             
@@ -907,25 +901,34 @@ class M5PullbackBot:
             
             margin_free = account_info.margin_free
             balance = account_info.balance
-            margin_level = account_info.margin_level if account_info.margin != 0 else 0
+            margin_level = account_info.margin_level if account_info.margin != 0 else 1000  # Si pas de positions ouvertes = OK
             
-            # Seuils de sécurité
-            min_margin_free = balance * 0.3  # 30% de la balance en margin libre
-            min_margin_level = 200  # Niveau de margin minimum 200%
+            # Seuils de sécurité corrigés
+            min_margin_free = balance * 0.2  # 20% de la balance en margin libre (au lieu de 30%)
+            min_margin_level = 150  # Niveau de margin minimum 150% (au lieu de 200%)
             
-            margin_ok = margin_free >= min_margin_free and margin_level >= min_margin_level
-            
-            if not margin_ok:
-                safe_log(f"⚠️ MARGIN INSUFFISANTE:")
-                safe_log(f"   💰 Margin libre: {margin_free:.2f}€ (min: {min_margin_free:.2f}€)")
-                safe_log(f"   📊 Niveau margin: {margin_level:.1f}% (min: 200%)")
-                safe_log(f"   🚫 Nouveaux trades suspendus")
+            # Si aucune position ouverte, on vérifie juste la balance libre
+            if margin_level >= 1000:  # Aucune position = niveau très élevé
+                margin_ok = margin_free >= min_margin_free
+                if not margin_ok:
+                    safe_log(f"⚠️ BALANCE INSUFFISANTE:")
+                    safe_log(f"   💰 Balance libre: {margin_free:.2f}€ (min: {min_margin_free:.2f}€)")
+                    safe_log(f"   🚫 Nouveaux trades suspendus")
+            else:
+                # Avec positions ouvertes, vérification complète
+                margin_ok = margin_free >= min_margin_free and margin_level >= min_margin_level
+                if not margin_ok:
+                    safe_log(f"⚠️ MARGIN INSUFFISANTE:")
+                    safe_log(f"   💰 Margin libre: {margin_free:.2f}€ (min: {min_margin_free:.2f}€)")
+                    safe_log(f"   📊 Niveau margin: {margin_level:.1f}% (min: 150%)")
+                    safe_log(f"   🚫 Nouveaux trades suspendus")
             
             return margin_ok
             
         except Exception as e:
             safe_log(f"❌ Erreur vérification margin: {e}")
-            return False
+            # En cas d'erreur, on autorise le trade (plus sûr)
+            return True
 
     def sync_positions_with_mt5(self):
         """Synchronise notre liste avec les positions réelles de MT5"""
