@@ -1,7 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 CONFIGURATION ULTRA SCALPING BOT
-==============================
+================# Configuration YOLO (extrêmement risquée)
+YOLO_CONFIG = {
+    'TP_PIPS': 1,
+    'USE_STOP_LOSS': False,
+    'SL_PIPS': 0,
+    'MAX_POSITIONS': 999,
+    'RSI_OVERBOUGHT': 65,  # ULTRA AGRESSIF : 65 au lieu de 75
+    'RSI_OVERSOLD': 35,    # ULTRA AGRESSIF : 35 au lieu de 25
+    'MIN_TREND_STRENGTH': 0.08  # Plus strict : 0.08 au lieu de 0.005
+}====
 
 Paramètres pour le bot ultra agressif contre-tendance
 Modifiez ces valeurs pour ajuster l'agressivité
