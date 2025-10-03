@@ -169,6 +169,12 @@ class M5PullbackBot:
         safe_log(f"📊 RSI SELL > {self.config['RSI_OVERBOUGHT']}")
         safe_log(f"📊 RSI BUY < {self.config['RSI_OVERSOLD']}")
         
+        # 🎯 NOUVEAU FILTRE ULTRA-STRICT
+        safe_log(f"⚡ FILTRE TENDANCE ULTRA-STRICT ACTIVÉ:")
+        safe_log(f"   🎯 Seuil minimum: 70% de certitude sur la tendance")
+        safe_log(f"   ✅ Seuls les signaux très fiables seront tradés")
+        safe_log(f"   🛡️ Qualité >>> Quantité - Protection maximale")
+        
         # 🛡️ FILET DE SÉCURITÉ ARGENT RÉEL - Seuil augmenté
         self.balance_safety_threshold = -0.05  # -5% de perte maximum
         self.initial_balance = 0  # Balance de référence (sera initialisée)
@@ -402,7 +408,7 @@ class M5PullbackBot:
             
             safe_log(f"🧮 POSITION SIZING ADAPTATIF:")
             safe_log(f"   💰 Equity: {equity:.2f}€")
-            safe_log(f"   � Niveau de balance: {'Faible' if balance < 2000 else 'Moyenne' if balance < 5000 else 'Bonne' if balance < 10000 else 'Forte'}")
+            safe_log(f"   � Niveau de balance: {'Faible' if equity < 2000 else 'Moyenne' if equity < 5000 else 'Bonne' if equity < 10000 else 'Forte'}")
             safe_log(f"   � Max positions adaptées: {max_positions_final}")
             safe_log(f"   �️ Risque par position (2.5%): {risque_acceptable:.2f}€")
             safe_log(f"   💸 Risque total maximum: {risque_total_max:.2f}€ ({(risque_total_max/equity*100):.1f}% de l'equity)")
@@ -1167,17 +1173,18 @@ class M5PullbackBot:
     
     def check_and_move_sl_to_breakeven(self):
         """
-        🔒 VERROUILLAGE AGRESSIF DES GAINS - Stop Loss Progressif
-        ========================================================
+        🚀 TRAILING STOP INTELLIGENT - Protection Progressive des Gains
+        ===============================================================
         
-        Nouveau Principe Agressif : Maximiser les gains même en cas de reversal.
+        Principe Ultra-Agressif : Protection dès 30% + Adaptation continue
         
-        Comment ça marche :
-        - Dès que le trade atteint 75% du TP (0.9 pips sur 1.2 pips TP)
-        - On déplace le SL à 50% du profit potentiel au lieu du prix d'entrée
-        - Scénario 1 (Idéal): Prix continue → TP à 1.2 pips
-        - Scénario 2 (Reversal): SL à +50% profit au lieu de 0€
-        - Exemple: TP=0.9 pips, déclenchement à 0.675 pips, SL à +0.45 pips
+        Étapes de protection :
+        1️⃣ 30% du TP → SL à breakeven (0% perte assurée)
+        2️⃣ 50% du TP → SL à 25% du profit (gain partiel sécurisé)
+        3️⃣ 75% du TP → SL à 50% du profit (gain substantiel)
+        4️⃣ 90% du TP → SL à 75% du profit (quasi TP sécurisé)
+        
+        ⚡ RÈGLE D'OR : Le SL ne recule JAMAIS, seulement progression !
         """
         if not self.open_positions:
             return
@@ -1191,20 +1198,22 @@ class M5PullbackBot:
         if not current_price:
             return
         
-        # Créer un set des tickets déjà traités pour éviter les logs en boucle
-        if not hasattr(self, '_breakeven_processed_tickets'):
-            self._breakeven_processed_tickets = set()
+        # 🛡️ SÉCURITÉ : Vérifier tickets déjà en échec
+        if not hasattr(self, '_failed_trailing_tickets'):
+            self._failed_trailing_tickets = set()
         
         for position in self.open_positions:
             ticket = position['ticket']
             entry_price = position['open_price']
             position_type = position['type']
             
+            # Skip tickets en échec critique
+            if ticket in self._failed_trailing_tickets:
+                continue
+            
             # Skip si prix d'entrée invalide
             if entry_price == 0.0:
-                if ticket not in self._breakeven_processed_tickets:
-                    safe_log(f"⚠️ BREAKEVEN SKIP - Ticket {ticket}: Prix d'entrée invalide (0.0)")
-                    self._breakeven_processed_tickets.add(ticket)
+                safe_log(f"⚠️ TRAILING SKIP - Ticket {ticket}: Prix d'entrée invalide (0.0)")
                 continue
             
             # Recherche de la position correspondante sur MT5
@@ -1217,17 +1226,15 @@ class M5PullbackBot:
             if not mt5_position:
                 continue
             
-            # Vérification BUY uniquement (cette stratégie ne gère que les BUY)
+            # 🔵 TRAILING STOP POUR POSITIONS BUY
             if position_type == 'BUY':
-                # Calcul du profit actuel et du TP cible pour breakeven agressif
+                # Calcul du profit actuel et du TP cible
                 symbol_info = mt5.symbol_info(self.symbol)
                 if symbol_info:
                     current_profit_distance = current_price.bid - entry_price
-                    # ✅ UTILISE LE TP RÉEL DE LA POSITION MT5 (adaptatif ATR)
                     tp_distance = mt5_position.tp - entry_price if mt5_position.tp > 0 else (25 * 0.1)
                 else:
                     current_profit_distance = current_price.bid - entry_price
-                    # ✅ FALLBACK COMPATIBLE AVEC TP ADAPTATIF
                     tp_distance = 25 * 0.1  # Fallback conservateur
                 
                 # Calcul du pourcentage de progression vers le TP
@@ -1236,124 +1243,222 @@ class M5PullbackBot:
                 else:
                     tp_progress_pct = 0
 
-                # 🎯 SEUIL AGRESSIF : 75% du TP (au lieu de pips fixes)
-                if tp_progress_pct >= 75.0:
+                # 🚀 TRAILING STOP INTELLIGENT - Déclenchement précoce à 30%
+                if tp_progress_pct >= 30.0:
                     
-                    # 🚀 NOUVEAU : SL ADAPTATIF selon les performances
-                    adaptive_sl_ratio = self.calculate_adaptive_breakeven_sl()
-                    target_profit_distance = tp_distance * adaptive_sl_ratio
-                    new_sl_aggressive = entry_price + target_profit_distance
+                    # 📈 CALCUL DU NIVEAU DE SL PROGRESSIF
+                    if tp_progress_pct >= 90.0:
+                        # Quasi TP atteint → 75% du profit sécurisé
+                        sl_profit_ratio = 0.75
+                        phase = "QUASI-TP (75% profit)"
+                    elif tp_progress_pct >= 75.0:
+                        # Bon momentum → 50% du profit sécurisé
+                        sl_profit_ratio = 0.50
+                        phase = "MOMENTUM (50% profit)"
+                    elif tp_progress_pct >= 50.0:
+                        # Progression solide → 25% du profit sécurisé
+                        sl_profit_ratio = 0.25
+                        phase = "PROGRESSION (25% profit)"
+                    else:
+                        # Premier niveau (30-50%) → Breakeven (0% perte)
+                        sl_profit_ratio = 0.0
+                        phase = "BREAKEVEN (0% perte)"
                     
-                    # Vérification si le SL est déjà proche de cette valeur (déjà configuré)
-                    sl_already_set = abs(mt5_position.sl - new_sl_aggressive) < 0.05  # Tolérance 5 points
+                    # Calcul du nouveau SL selon la phase
+                    target_profit_distance = tp_distance * sl_profit_ratio
+                    new_sl_progressive = entry_price + target_profit_distance
                     
-                    if sl_already_set and ticket not in self._breakeven_processed_tickets:
-                        safe_log(f"✅ BREAKEVEN AGRESSIF DÉJÀ ACTIF - Ticket {ticket}")
-                        safe_log(f"   💰 Progression TP: {tp_progress_pct:.1f}% (seuil: 75%)")
-                        safe_log(f"   �️ SL au breakeven: {mt5_position.sl:.2f} (entrée: {entry_price:.2f})")
-                        self._breakeven_processed_tickets.add(ticket)
+                    # 🛡️ RÈGLE D'OR : Ne JAMAIS reculer le SL
+                    current_sl = mt5_position.sl if mt5_position.sl > 0 else entry_price
+                    if new_sl_progressive <= current_sl:
+                        # SL déjà plus avantageux, on garde l'actuel
                         continue
                     
-                    # Vérification si le SL doit être mis à jour
-                    sl_needs_update = (mt5_position.sl == 0.0) or (not sl_already_set)
+                    # 🔒 SÉCURITÉS RENFORCÉES AVANT MODIFICATION
+                    # 1. Vérifier que la position existe encore
+                    fresh_position = mt5.positions_get(ticket=ticket)
+                    if not fresh_position or len(fresh_position) == 0:
+                        safe_log(f"⚠️ Position {ticket} fermée, skip trailing stop")
+                        continue
                     
-                    if sl_needs_update and ticket not in self._breakeven_processed_tickets:
-                        safe_log(f"🔍 BREAKEVEN AGRESSIF - Ticket {ticket}:")
-                        safe_log(f"   💰 Progression TP: {tp_progress_pct:.1f}% (seuil: 75%)")
-                        safe_log(f"   📊 Profit actuel: +{current_profit_distance:.3f} | TP cible: {tp_distance:.3f}")
-                        safe_log(f"   📊 SL actuel: {mt5_position.sl} | Prix entrée: {entry_price}")
+                    # 2. Vérifier que le profit est toujours positif
+                    current_profit = fresh_position[0].profit
+                    if current_profit <= 0:
+                        safe_log(f"⚠️ Position {ticket} en perte ({current_profit:.2f}€), pas de trailing stop")
+                        continue
+                    
+                    # 3. Vérification si le SL est déjà proche de cette valeur
+                    sl_tolerance = 0.00005  # 0.5 pip de tolérance
+                    sl_already_set = abs(mt5_position.sl - new_sl_progressive) < sl_tolerance
+                    
+                    if sl_already_set:
+                        continue
+                    
+                    # 4. SÉCURITÉS MT5 - Distance minimale obligatoire
+                    current_price_ask = mt5.symbol_info_tick(self.symbol).ask
+                    
+                    if not symbol_info or not current_price_ask:
+                        safe_log(f"⚠️ Impossible d'obtenir les infos symbol pour {ticket}")
+                        continue
+                    
+                    # Distance minimale imposée par MT5
+                    min_distance = symbol_info.trade_stops_level * symbol_info.point
+                    spread = symbol_info.spread * symbol_info.point
+                    
+                    # Sécurité supplémentaire : 10 points + spread
+                    safety_buffer = max(min_distance, spread) + (10 * symbol_info.point)
+                    
+                    # Vérifier que le nouveau SL respecte la distance minimale
+                    distance_from_current = abs(new_sl_progressive - current_price_ask)
+                    if distance_from_current < safety_buffer:
+                        # Ajuster le SL pour respecter les contraintes
+                        new_sl_progressive = current_price_ask - safety_buffer
+                        safe_log(f"   🔧 SL ajusté pour sécurité: {new_sl_progressive:.5f}")
                         
-                        # VÉRIFICATION CONTRAINTES MT5 - SL doit être suffisamment éloigné du prix actuel
-                        symbol_info = mt5.symbol_info(self.symbol)
-                        if symbol_info:
-                            current_price_ask = mt5.symbol_info_tick(self.symbol).ask
-                            min_distance = symbol_info.trade_stops_level * symbol_info.point
-                            
-                            # Ajustement si trop proche du prix actuel
-                            if abs(new_sl_aggressive - current_price_ask) < min_distance:
-                                new_sl_aggressive = current_price_ask - min_distance - (5 * symbol_info.point)
-                                safe_log(f"   ⚠️ SL ajusté pour respecter stops_level: {new_sl_aggressive:.5f}")
-                            
-                            # Calcul du profit garanti avec système adaptatif
-                            guaranteed_profit_distance = new_sl_aggressive - entry_price
-                            guaranteed_profit_pips = guaranteed_profit_distance / 0.01
-                            safe_log(f"   🎯 SL adaptatif: {new_sl_aggressive:.3f} ({adaptive_sl_ratio*100:.0f}% du profit selon performances)")
-                            safe_log(f"   💰 Profit garanti: +{guaranteed_profit_pips:.1f} pips (adaptatif)")
-                        else:
-                            # Fallback avec système adaptatif
-                            guaranteed_profit_distance = new_sl_aggressive - entry_price
-                            guaranteed_profit_pips = guaranteed_profit_distance / 0.01
-                            safe_log(f"   🎯 SL adaptatif: {new_sl_aggressive:.3f} ({adaptive_sl_ratio*100:.0f}% profit)")
-                            safe_log(f"   💰 Profit garanti: +{guaranteed_profit_pips:.1f} pips")
-                        
-                        # Modification de la position sur MT5
-                        request = {
-                            "action": mt5.TRADE_ACTION_SLTP,
-                            "symbol": self.symbol,
-                            "position": ticket,
-                            "sl": new_sl_aggressive,
-                            "tp": mt5_position.tp,  # Garde le même TP
-                        }
-                        
+                        # Vérifier que le SL ajusté est toujours meilleur que l'actuel
+                        if new_sl_progressive <= current_sl:
+                            safe_log(f"   ⚠️ SL ajusté trop bas, maintien du SL actuel")
+                            continue
+                    
+                    # ✅ LOGGING DE DÉBOGAGE RENFORCÉ
+                    safe_log(f"🚀 TRAILING STOP - Ticket {ticket} - Phase: {phase}")
+                    safe_log(f"   📊 Progression TP: {tp_progress_pct:.1f}% (seuil: 30%)")
+                    safe_log(f"   💰 Profit actuel: +{current_profit_distance:.3f} | TP cible: {tp_distance:.3f}")
+                    safe_log(f"   🔄 SL: {current_sl:.5f} → {new_sl_progressive:.5f}")
+                    
+                    # Calcul du profit garanti avec système progressif
+                    guaranteed_profit_distance = new_sl_progressive - entry_price
+                    guaranteed_profit_pips = guaranteed_profit_distance / symbol_info.point / 10
+                    safe_log(f"   🎯 SL progressif: {new_sl_progressive:.5f} ({sl_profit_ratio*100:.0f}% du profit)")
+                    safe_log(f"   💰 Profit garanti: +{guaranteed_profit_pips:.1f} pips")
+                    
+                    # 🔒 MODIFICATION SÉCURISÉE DE LA POSITION SUR MT5
+                    request = {
+                        "action": mt5.TRADE_ACTION_SLTP,
+                        "symbol": self.symbol,
+                        "position": ticket,
+                        "sl": new_sl_progressive,
+                        "tp": mt5_position.tp,  # Garde le même TP
+                        "magic": mt5_position.magic,  # Sécurité supplémentaire
+                        "comment": f"TrailingStop-{phase[:8]}"  # Identifier la source
+                    }
+                    
+                    # Tentative de modification avec gestion d'erreur robuste
+                    try:
                         result = mt5.order_send(request)
                         
-                        if result.retcode == mt5.TRADE_RETCODE_DONE:
-                            safe_log(f"🔒 GAINS AGRESSIFS VERROUILLÉS! Ticket {ticket}")
-                            safe_log(f"   💰 Progression TP: {tp_progress_pct:.1f}%")
-                            safe_log(f"   🛡️ SL agressif: {new_sl_aggressive:.3f} (profit garanti)")
-                            safe_log(f"   ✅ Trade protégé: Perte impossible, profit minimum garanti!")
-                            self._breakeven_processed_tickets.add(ticket)
+                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                            safe_log(f"🔒 TRAILING STOP ACTIVÉ! Ticket {ticket}")
+                            safe_log(f"   📈 Phase: {phase}")
+                            safe_log(f"   💰 Progression: {tp_progress_pct:.1f}%")
+                            safe_log(f"   🛡️ SL sécurisé: {new_sl_progressive:.5f}")
+                            safe_log(f"   ✅ Profit minimum garanti: +{guaranteed_profit_pips:.1f} pips!")
+                            
+                        elif result:
+                            # Gestion des erreurs spécifiques
+                            error_msg = result.comment if hasattr(result, 'comment') else "Erreur inconnue"
+                            safe_log(f"❌ Échec trailing stop {ticket}: Code {result.retcode}")
+                            safe_log(f"   📝 Détail: {error_msg}")
+                            
+                            # Erreurs critiques qui nécessitent d'arrêter les tentatives
+                            critical_errors = [
+                                mt5.TRADE_RETCODE_INVALID_STOPS,
+                                mt5.TRADE_RETCODE_INVALID_PRICE,
+                                mt5.TRADE_RETCODE_INVALID_ORDER,
+                                mt5.TRADE_RETCODE_TRADE_DISABLED
+                            ]
+                            
+                            if result.retcode in critical_errors:
+                                safe_log(f"   🚨 Erreur critique, arrêt trailing pour {ticket}")
+                                self._failed_trailing_tickets.add(ticket)
                         else:
-                            safe_log(f"❌ Échec déplacement SL pour {ticket}: {result.comment}")
-                            # Marquer comme traité même en cas d'échec pour éviter le spam
-                            self._breakeven_processed_tickets.add(ticket)
+                            safe_log(f"❌ Aucune réponse MT5 pour trailing stop {ticket}")
+                            
+                    except Exception as e:
+                        safe_log(f"❌ Exception trailing stop {ticket}: {str(e)}")
+                        safe_log(f"   🔧 Requête: SL {new_sl_progressive:.5f}, TP {mt5_position.tp:.5f}")
             
+            # 🔴 TRAILING STOP POUR POSITIONS SELL (similaire mais inversé)
             else:
-                # 🔴 BREAKEVEN POUR POSITIONS SELL
-                if ticket not in self._breakeven_processed_tickets:
-                    # Même logique que BUY mais inversée
-                    symbol_info = mt5.symbol_info(self.symbol)
-                    if symbol_info:
-                        current_profit_distance = entry_price - current_price.ask  # Inversé pour SELL
-                        # ✅ UTILISE LE TP RÉEL DE LA POSITION MT5 (adaptatif ATR)
-                        tp_distance = entry_price - mt5_position.tp if mt5_position.tp > 0 else (25 * 0.1)
+                # Même logique que BUY mais inversée pour SELL
+                symbol_info = mt5.symbol_info(self.symbol)
+                if symbol_info:
+                    current_profit_distance = entry_price - current_price.ask  # Inversé pour SELL
+                    tp_distance = entry_price - mt5_position.tp if mt5_position.tp > 0 else (25 * 0.1)
+                else:
+                    current_profit_distance = entry_price - current_price.ask
+                    tp_distance = 25 * 0.1
+                
+                # Calcul du pourcentage de progression vers le TP
+                if tp_distance > 0:
+                    tp_progress_pct = (current_profit_distance / tp_distance) * 100
+                else:
+                    tp_progress_pct = 0
+
+                # Trailing stop pour SELL (même logique que BUY mais inversée)
+                if tp_progress_pct >= 30.0:
+                    
+                    # Calcul des niveaux de SL progressifs (même logique)
+                    if tp_progress_pct >= 90.0:
+                        sl_profit_ratio = 0.75
+                        phase = "QUASI-TP (75% profit)"
+                    elif tp_progress_pct >= 75.0:
+                        sl_profit_ratio = 0.50
+                        phase = "MOMENTUM (50% profit)"
+                    elif tp_progress_pct >= 50.0:
+                        sl_profit_ratio = 0.25
+                        phase = "PROGRESSION (25% profit)"
                     else:
-                        current_profit_distance = entry_price - current_price.ask
-                        # ✅ FALLBACK COMPATIBLE AVEC TP ADAPTATIF
-                        tp_distance = 25 * 0.1
+                        sl_profit_ratio = 0.0
+                        phase = "BREAKEVEN (0% perte)"
                     
-                    # Calcul progression vers TP
-                    if tp_distance > 0:
-                        tp_progress_pct = (current_profit_distance / tp_distance) * 100
-                        
-                        # Breakeven à 75% du TP avec SL adaptatif
-                        if tp_progress_pct >= 75.0:
-                            # 🚀 NOUVEAU : SL ADAPTATIF selon les performances (SELL)
-                            adaptive_sl_ratio = self.calculate_adaptive_breakeven_sl()
-                            target_profit_distance = tp_distance * adaptive_sl_ratio
-                            new_sl_aggressive = entry_price - target_profit_distance
-                            
-                            # Vérification si SL doit être mis à jour
-                            sl_needs_update = (mt5_position.sl == 0 or mt5_position.sl > new_sl_aggressive)
-                            
-                            if sl_needs_update:
-                                safe_log(f"🔍 BREAKEVEN SELL ADAPTATIF - Ticket {ticket}: {tp_progress_pct:.1f}% TP atteint")
-                                safe_log(f"   🎯 SL adaptatif SELL: {new_sl_aggressive:.3f} ({adaptive_sl_ratio*100:.0f}% profit selon performances)")
-                                
-                                request = {
-                                    "action": mt5.TRADE_ACTION_SLTP,
-                                    "symbol": self.symbol,
-                                    "position": ticket,
-                                    "sl": new_sl_aggressive,
-                                    "tp": mt5_position.tp,
-                                }
-                                
-                                result = mt5.order_send(request)
-                                if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-                                    safe_log(f"✅ BREAKEVEN SELL activé pour {ticket}")
+                    # Pour SELL : SL = entry_price - (tp_distance * ratio)
+                    target_profit_distance = tp_distance * sl_profit_ratio
+                    new_sl_progressive = entry_price - target_profit_distance
                     
-                    self._breakeven_processed_tickets.add(ticket)
-    
+                    # Ne jamais reculer le SL (pour SELL, cela signifie ne jamais l'augmenter)
+                    current_sl = mt5_position.sl if mt5_position.sl > 0 else entry_price
+                    if new_sl_progressive >= current_sl:
+                        continue
+                    
+                    # Mêmes vérifications de sécurité que pour BUY...
+                    fresh_position = mt5.positions_get(ticket=ticket)
+                    if not fresh_position or len(fresh_position) == 0:
+                        continue
+                    
+                    current_profit = fresh_position[0].profit
+                    if current_profit <= 0:
+                        continue
+                    
+                    sl_tolerance = 0.00005
+                    if abs(mt5_position.sl - new_sl_progressive) < sl_tolerance:
+                        continue
+                    
+                    # Modification du SL pour SELL (même requête que BUY)
+                    request = {
+                        "action": mt5.TRADE_ACTION_SLTP,
+                        "symbol": self.symbol,
+                        "position": ticket,
+                        "sl": new_sl_progressive,
+                        "tp": mt5_position.tp,
+                        "magic": mt5_position.magic,
+                        "comment": f"TrailingStop-SELL-{phase[:8]}"
+                    }
+                    
+                    try:
+                        result = mt5.order_send(request)
+                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                            safe_log(f"🔒 TRAILING STOP SELL ACTIVÉ! Ticket {ticket}")
+                            safe_log(f"   📈 Phase: {phase}")
+                            safe_log(f"   💰 Progression: {tp_progress_pct:.1f}%")
+                            safe_log(f"   🛡️ SL sécurisé: {new_sl_progressive:.5f}")
+                        elif result:
+                            safe_log(f"❌ Échec trailing stop SELL {ticket}: {result.retcode}")
+                            if result.retcode in [mt5.TRADE_RETCODE_INVALID_STOPS, mt5.TRADE_RETCODE_INVALID_PRICE]:
+                                self._failed_trailing_tickets.add(ticket)
+                    except Exception as e:
+                        safe_log(f"❌ Exception trailing stop SELL {ticket}: {str(e)}")
+
     def close_positive_positions(self):
         """🟢 FERME AUTOMATIQUEMENT TOUTES LES POSITIONS POSITIVES"""
         if not ENABLE_REAL_TRADING:
@@ -2254,7 +2359,7 @@ class M5PullbackBot:
         return [50] * period + rsi_values
     
     def should_open_position(self, trend, strength, indicators, time_since_last_buy=None):
-        """🎯 NOUVELLE LOGIQUE M5 PULLBACK : Qualité > Quantité"""
+        """🎯 LOGIQUE M5 PULLBACK ULTRA-SÉLECTIVE : 70% de certitude minimum"""
         
         current_time = datetime.now()
         current_price = indicators['price']
@@ -2268,8 +2373,10 @@ class M5PullbackBot:
         if self.stats['balance_safety_active']:
             return None  # Pas de nouveaux trades en mode sécurité
         
-        # 🎯 FILTRE QUALITÉ MINIMUM : On ne trade que les setups de haute qualité
-        if strength < 30:  # Force minimale requise
+        # 🎯 FILTRE QUALITÉ ULTRA-STRICT : 70% de certitude sur la tendance
+        if strength < 70:  # ⚡ NOUVEAU SEUIL : 70% minimum (au lieu de 30%)
+            if strength >= 30:  # Log informatif pour les signaux rejetés
+                safe_log(f"❌ SIGNAL REJETÉ: Force {strength:.1f}% < 70% requis - Pas assez fiable")
             return None
         
         if pullback_quality < 60:  # Qualité pullback minimale (60%)
@@ -2523,8 +2630,9 @@ class M5PullbackBot:
             else:
                 safety_status = f"Balance:OK"
         
-        # 🎯 AFFICHAGE ÉTAT M5 PULLBACK (plus riche en information)
-        safe_log(f"📊 M5 ${current_price:.2f} | {trend} {strength:.1f}% | "
+        # 🎯 AFFICHAGE ÉTAT M5 PULLBACK (seuil ultra-strict 70%)
+        strength_status = f"✅{strength:.1f}%" if strength >= 70 else f"❌{strength:.1f}%"
+        safe_log(f"📊 M5 ${current_price:.2f} | {trend} {strength_status}(≥70%) | "
                 f"RSI:{current_rsi:.1f} | ATR:{current_atr:.3f} | "
                 f"EMA200:{ema_master:.2f} | EMA50:{ema_pullback:.2f} | "
                 f"Pullback:{pullback_quality:.0f}% | Pos:{open_positions_count} | "
