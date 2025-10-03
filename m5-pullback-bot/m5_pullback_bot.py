@@ -422,37 +422,95 @@ class M5PullbackBot:
     
     def calculate_adaptive_tp_ratio(self, trend_strength):
         """
-        🎯 CALCUL DU RATIO TP/SL ADAPTATIF SELON LA FORCE DE LA TENDANCE
-        ================================================================
+        🎯 RATIO TP/SL RÉALISTE ADAPTÉ AU MARCHÉ DE L'OR
+        ================================================
         
-        Logique intelligente:
-        - Tendance faible (0-50%) : Ratio 1:2.0 (standard - sécurise rapidement)
-        - Tendance forte (50-80%) : Ratio 1:2.5 (profite de l'élan)
-        - Tendance très forte (80%+) : Ratio 1:3.0 (maximise les gains exceptionnels)
+        Nouvelles règles ultra-réalistes pour XAUUSD:
+        - Tendance faible (0-50%) : Ratio 1:1.2 (objectif conservateur - 20% plus que le risque)
+        - Tendance forte (50-80%) : Ratio 1:1.5 (équilibré - 50% plus que le risque)  
+        - Tendance très forte (80%+) : Ratio 1:2.0 (ambitieux mais atteignable)
+        
+        Logique: L'or est volatil mais les grands mouvements prennent du temps.
+        Mieux vaut sécuriser des petits gains réguliers que viser l'impossible.
         
         Args:
             trend_strength (float): Force de la tendance entre 0 et 100%
             
         Returns:
-            float: Ratio TP/SL adaptatif
+            float: Ratio TP/SL réaliste adapté au marché
         """
         try:
             if trend_strength >= 80:
-                tp_ratio = 3.0  # 🚀 Tendance très forte - maximiser profits
+                tp_ratio = 2.0  # 🎯 Très forte - ambitieux mais atteignable
                 strength_level = "TRÈS FORTE"
             elif trend_strength >= 50:
-                tp_ratio = 2.5  # ⚡ Tendance forte - profiter de l'élan
+                tp_ratio = 1.5  # ⚖️ Forte - équilibré et réaliste
                 strength_level = "FORTE"
             else:
-                tp_ratio = 2.0  # 🛡️ Tendance faible - sécuriser rapidement
+                tp_ratio = 1.2  # 🛡️ Faible - conservateur et sûr
                 strength_level = "FAIBLE/MOYENNE"
             
-            safe_log(f"🎯 TP ADAPTATIF: Tendance {strength_level} ({trend_strength:.1f}%) → Ratio 1:{tp_ratio}")
+            safe_log(f"🎯 TP RÉALISTE: Tendance {strength_level} ({trend_strength:.1f}%) → Ratio 1:{tp_ratio}")
             return tp_ratio
             
         except Exception as e:
-            safe_log(f"❌ Erreur calcul TP adaptatif: {e}, utilisation ratio par défaut 2.0")
-            return 2.0  # Fallback sur ratio standard
+            safe_log(f"❌ Erreur calcul TP adaptatif: {e}, utilisation ratio par défaut 1.5")
+            return 1.5  # Fallback sur ratio réaliste
+    
+    def calculate_market_aware_tp_ratio(self, trend_strength, atr_value):
+        """
+        🎯 TP ULTRA-RÉALISTE : Tendance + Volatilité du marché
+        =====================================================
+        
+        Système révolutionnaire qui adapte le TP selon:
+        1. Force de la tendance (fiabilité du signal)
+        2. Volatilité actuelle (ATR - faisabilité du mouvement)
+        
+        Logique:
+        - ATR faible (< 2.0) : Marché calme → TP plus conservateurs
+        - ATR normale (2.0-4.0) : Marché standard → TP équilibrés  
+        - ATR élevée (> 4.0) : Marché agité → TP plus ambitieux possible
+        
+        Args:
+            trend_strength (float): Force de la tendance (0-100%)
+            atr_value (float): Valeur ATR actuelle
+            
+        Returns:
+            float: Ratio TP/SL ultra-adaptatif
+        """
+        try:
+            # Base du ratio selon la force de tendance (version réaliste)
+            if trend_strength >= 80:
+                base_ratio = 2.0  # Très forte
+            elif trend_strength >= 50:
+                base_ratio = 1.5  # Forte
+            else:
+                base_ratio = 1.2  # Faible
+            
+            # Ajustement selon la volatilité (ATR)
+            if atr_value < 2.0:
+                # Marché très calme - réduire les attentes
+                volatility_factor = 0.8
+                volatility_desc = "CALME"
+            elif atr_value > 4.0:
+                # Marché très volatil - peut viser un peu plus haut
+                volatility_factor = 1.1
+                volatility_desc = "AGITÉ"
+            else:
+                # Volatilité normale
+                volatility_factor = 1.0
+                volatility_desc = "NORMALE"
+            
+            # Calcul final avec plafond de sécurité
+            final_ratio = base_ratio * volatility_factor
+            final_ratio = min(final_ratio, 2.2)  # Plafond absolu à 2.2 pour rester réaliste
+            
+            safe_log(f"🎯 TP MARKET-AWARE: Tendance {trend_strength:.1f}% + ATR {atr_value:.2f} ({volatility_desc}) = Ratio 1:{final_ratio:.2f}")
+            return final_ratio
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur calcul TP market-aware: {e}")
+            return 1.5  # Fallback sécuritaire
     
     def calculate_adaptive_breakeven_sl(self):
         """
@@ -2496,10 +2554,10 @@ class M5PullbackBot:
         # 🎯 CALCUL TP/SL ADAPTATIFS BASÉS SUR L'ATR ET LA FORCE DE LA TENDANCE
         sl_distance = ATR_SL_MULTIPLIER * atr_value  # SL à 1.5x ATR
         
-        # 🚀 NOUVEAU : TP ADAPTATIF selon la force de la tendance
+        # 🎯 NOUVEAU : TP ULTRA-RÉALISTE basé sur tendance ET volatilité
         trend_strength = signal.get('strength', 50)  # Force de la tendance (défaut 50%)
-        adaptive_tp_ratio = self.calculate_adaptive_tp_ratio(trend_strength)
-        tp_distance = adaptive_tp_ratio * sl_distance  # TP adaptatif selon la force
+        adaptive_tp_ratio = self.calculate_market_aware_tp_ratio(trend_strength, atr_value)
+        tp_distance = adaptive_tp_ratio * sl_distance  # TP adaptatif selon marché
         
         # Application selon le type d'ordre
         if trade_type == 'BUY':
@@ -2513,14 +2571,14 @@ class M5PullbackBot:
         sl_pips = sl_distance / 0.1
         tp_pips = tp_distance / 0.1
         
-        # 🎯 LOG DÉTAILLÉ DE LA STRATÉGIE M5 AVEC TP ADAPTATIF
+        # 🎯 LOG DÉTAILLÉ DE LA STRATÉGIE M5 AVEC TP MARKET-AWARE
         safe_log(f"⚡ TRADE M5 {trade_type} - {signal['reason']}")
         safe_log(f"   📊 ATR actuel: {atr_value:.3f} (volatilité du marché)")
-        safe_log(f"   🎯 Force tendance: {trend_strength:.1f}% → Ratio TP adaptatif 1:{adaptive_tp_ratio}")
+        safe_log(f"   🎯 Force tendance: {trend_strength:.1f}% → TP market-aware 1:{adaptive_tp_ratio:.2f}")
         safe_log(f"   💰 Prix entrée: ${entry_price:.2f}")
-        safe_log(f"   🛡️ SL adaptatif: ${sl_price:.2f} ({sl_pips:.1f} pips = 1.5x ATR)")
-        safe_log(f"   🚀 TP adaptatif: ${tp_price:.2f} ({tp_pips:.1f} pips = {adaptive_tp_ratio}x SL)")
-        safe_log(f"   ⚖️ Ratio R/R: 1:{adaptive_tp_ratio} (ADAPTATIF selon force tendance)")
+        safe_log(f"   🛡️ SL réaliste: ${sl_price:.2f} ({sl_pips:.1f} pips = 1.5x ATR)")
+        safe_log(f"   🚀 TP réaliste: ${tp_price:.2f} ({tp_pips:.1f} pips = {adaptive_tp_ratio:.2f}x SL)")
+        safe_log(f"   ⚖️ Ratio R/R: 1:{adaptive_tp_ratio:.2f} (MARKET-AWARE - Tendance + Volatilité)")
         safe_log(f"   📈 Force signal: {signal['strength']:.1f}%")
         safe_log(f"   🎯 Qualité pullback: {signal['pullback_quality']:.1f}%")
         safe_log(f"   📊 RSI: {signal['rsi']:.1f}")
