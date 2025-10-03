@@ -17,7 +17,7 @@ Il n'est pas un bot de haute fréquence.
 
 🛡️ SÉCURITÉS PROFESSIONNELLES :
 -   Pause automatique de 1h si la perte journalière atteint -5% de la balance.
--   Fermeture automatique de toutes les positions en fin de journée (22h50) et fin de semaine (vendredi soir).
+-   Arrêt automatique du trading à 22h00 (positions maintenues avec SL/TP actifs).
 -   Stop Loss obligatoire sur chaque trade.
 
 
@@ -108,7 +108,7 @@ RSI_PERIOD = 14                 # RSI standard (14 périodes)
 # 🎯 STRATÉGIE RÉVISÉE : TP PETITS + SL GRANDS + LOTS ÉLEVÉS
 ATR_PULLBACK_MULTIPLIER = 4.5   # Distance max à l'EMA 50 (4.5x ATR - plus sensible pour plus d'opportunités)
 ATR_SL_MULTIPLIER = 2.5         # 🔥 SL plus grand à 2.5x ATR (plus de respiration)
-TP_MAX_POINTS = 180             # 🎯 TP maximum : 180 points (18 pips) - PLAFONNÉ
+TP_MAX_POINTS = 200             # 🎯 TP maximum : 200 points (20 pips) - PLAFONNÉ
 RISK_MULTIPLIER = 1.5           # 💰 Multiplicateur de risque augmenté (lots plus élevés)
 
 # 🎯 ZONES RSI POUR PULLBACK
@@ -211,8 +211,8 @@ class M5PullbackBot:
         # Variables système profit quotidien adaptatif
         self.daily_start_balance = 0  # Balance de départ du jour
         
-        # 🕐 HORAIRES DE TRADING - Fermeture automatique à 22h50, reprise à 00h20
-        self.daily_close_time = 22.83  # Heure de fermeture (22h50) - ultra-étendu
+        # 🕐 HORAIRES DE TRADING - Arrêt du trading à 22h00, reprise à 00h20
+        self.daily_close_time = 22.0   # Heure d'arrêt du trading (22h00) - PLUS DE FERMETURE FORCÉE
         self.daily_start_time = 0.33   # Heure de reprise (00h20)
         
         # Vérification de l'état initial selon l'heure de démarrage
@@ -221,16 +221,16 @@ class M5PullbackBot:
         current_minute = current_time.minute
         current_time_decimal = current_hour + (current_minute / 60.0)
         
-        # Si on démarre en dehors des heures de trading (avant 00h20 ou après 22h50)
+        # Si on démarre en dehors des heures de trading (avant 00h20 ou après 22h00)
         if current_time_decimal < self.daily_start_time or current_time_decimal >= self.daily_close_time:
             self.is_trading_paused = True  # Démarre en pause
             safe_log(f"🕐 DÉMARRAGE EN PAUSE NOCTURNE - {current_hour}h{current_minute:02d}")
-            safe_log(f"   🌙 Trading fermé (horaires: 00h20 à 22h50)")
+            safe_log(f"   🌙 Trading fermé (horaires: 00h20 à 22h00)")
             safe_log(f"   ⏳ Reprise prévue à 00h20")
         else:
             self.is_trading_paused = False  # Démarre en mode actif
             safe_log(f"🕐 DÉMARRAGE EN HEURES DE TRADING - {current_hour}h{current_minute:02d}")
-            safe_log(f"   ✅ Trading autorisé jusqu'à 22h50")
+            safe_log(f"   ✅ Trading autorisé jusqu'à 22h00")
         
         # État des positions
         self.open_positions = []
@@ -460,18 +460,19 @@ class M5PullbackBot:
     
     def calculate_market_aware_tp_ratio(self, trend_strength, atr_value, sl_distance):
         """
-        🎯 TP PLAFONNÉ À 180 POINTS : Stratégie Révisée
-        ===============================================
+        🎯 TP ADAPTATIF SELON VOLATILITÉ : Stratégie Révisée
+        ===================================================
         
-        NOUVELLE STRATÉGIE:
-        - TP maximum : 180 points (18 pips) TOUJOURS respecté
+        NOUVELLE STRATÉGIE VOLATILITÉ :
+        - Marché TRÈS VOLATIL (ATR > 6.0) : TP 400 points (40 pips)
+        - Marché NORMAL : TP 200 points (20 pips) 
         - SL plus grand (2.5x ATR) pour respiration
-        - Lots augmentés car TP plus petits = moins de risque par trade
+        - Lots adaptés selon volatilité
         
         Logic:
-        1. Calcule un TP basé sur tendance + volatilité  
-        2. PLAFONNE à 180 points maximum
-        3. Adapte selon les conditions de marché
+        1. Détecte la volatilité extrême (ATR > 6.0)
+        2. Adapte le TP selon volatilité et tendance
+        3. Optimise pour profiter des grands mouvements
         
         Args:
             trend_strength (float): Force de la tendance (0-100%)
@@ -479,15 +480,24 @@ class M5PullbackBot:
             sl_distance (float): Distance du SL en price
             
         Returns:
-            float: Distance TP réelle (plafonnée à 180 points)
+            float: Distance TP réelle (adaptée à la volatilité)
         """
         try:
-            # 🎯 PLAFOND ABSOLU : 180 points maximum
-            max_tp_distance = 180 * 0.01  # 180 points = 1.80 en price pour XAUUSD
+            # 🔥 DÉTECTION VOLATILITÉ EXTRÊME : ATR > 6.0 = Marché très volatil
+            if atr_value > 6.0:
+                # 🚀 MARCHÉ TRÈS VOLATIL : TP étendu à 400 points
+                max_tp_distance = 400 * 0.01  # 400 points = 4.00 en price pour XAUUSD
+                volatility_level = "TRÈS VOLATIL"
+                safe_log(f"🔥 MARCHÉ TRÈS VOLATIL DÉTECTÉ - ATR {atr_value:.2f} > 6.0")
+                safe_log(f"🚀 TP ÉTENDU : 400 points (40 pips) pour profiter de la volatilité")
+            else:
+                # 📊 MARCHÉ NORMAL : TP standard à 200 points
+                max_tp_distance = TP_MAX_POINTS * 0.01  # 200 points = 2.00 en price pour XAUUSD
+                volatility_level = "NORMAL"
             
             # Base du ratio selon la force de tendance
             if trend_strength >= 80:
-                base_ratio = 1.8  # Très forte mais plafonné
+                base_ratio = 1.8  # Très forte
             elif trend_strength >= 50:
                 base_ratio = 1.4  # Forte
             else:
@@ -497,6 +507,9 @@ class M5PullbackBot:
             if atr_value < 2.0:
                 volatility_factor = 0.8
                 volatility_desc = "CALME"
+            elif atr_value > 6.0:
+                volatility_factor = 1.2  # Boost pour volatilité extrême
+                volatility_desc = "TRÈS VOLATIL"
             elif atr_value > 4.0:
                 volatility_factor = 1.1
                 volatility_desc = "AGITÉ"
@@ -507,7 +520,7 @@ class M5PullbackBot:
             # Calcul du TP théorique
             theoretical_tp = base_ratio * volatility_factor * sl_distance
             
-            # 🔥 APPLICATION DU PLAFOND : Jamais plus de 180 points
+            # 🎯 APPLICATION DU PLAFOND ADAPTATIF
             final_tp_distance = min(theoretical_tp, max_tp_distance)
             
             # Calcul du ratio réel
@@ -517,14 +530,15 @@ class M5PullbackBot:
             is_capped = final_tp_distance == max_tp_distance
             cap_status = "🔥 PLAFONNÉ" if is_capped else "✅ LIBRE"
             
-            safe_log(f"🎯 TP PLAFONNÉ: {cap_status} | Théorique {theoretical_tp:.3f} → Réel {final_tp_distance:.3f}")
-            safe_log(f"   📊 ATR {atr_value:.2f} ({volatility_desc}) | Ratio final 1:{actual_ratio:.2f}")
+            safe_log(f"🎯 TP ADAPTATIF: {cap_status} | Volatilité {volatility_level}")
+            safe_log(f"   📊 ATR {atr_value:.2f} ({volatility_desc}) | TP Max: {max_tp_distance/0.01:.0f}pts")
+            safe_log(f"   🎯 Théorique {theoretical_tp:.3f} → Réel {final_tp_distance:.3f} | Ratio 1:{actual_ratio:.2f}")
             
             return final_tp_distance
             
         except Exception as e:
-            safe_log(f"❌ Erreur calcul TP plafonné: {e}")
-            return min(1.5 * sl_distance, 180 * 0.01)  # Fallback sécuritaire
+            safe_log(f"❌ Erreur calcul TP adaptatif: {e}")
+            return min(1.5 * sl_distance, 200 * 0.01)  # Fallback sécuritaire
     
     def calculate_adaptive_breakeven_sl(self):
         """
@@ -827,7 +841,7 @@ class M5PullbackBot:
             
             # 🕐 Vérification horaires de trading avant de placer un ordre
             if not self.check_trading_hours():
-                safe_log(f"🚫 Ordre refusé - Trading fermé (horaires: 00h20 à 22h50)")
+                safe_log(f"🚫 Ordre refusé - Trading fermé (horaires: 00h20 à 22h00)")
                 return False
             
             # Vérification connexion MT5
@@ -1752,14 +1766,14 @@ class M5PullbackBot:
                 
                 safe_log(f"✅ RESET AUTOMATIQUE TERMINÉ - ARGENT RÉEL:")
                 safe_log(f"🛡️ Système de sécurité balance opérationnel (seuil -5%)")
-                safe_log(f"🕐 Trading actif de 00h20 à 22h50")
+                safe_log(f"🕐 Trading actif de 00h20 à 22h00")
                 safe_log(f"🚨 Mode argent réel avec sécurités renforcées")
                 
         except Exception as e:
             safe_log(f"❌ Erreur reset quotidien: {e}")
 
     def check_trading_hours(self):
-        """🕐 Vérifie les horaires de trading et gère la fermeture automatique à 22h50 et reprise à 00h20"""
+        """🕐 Vérifie les horaires de trading - ARRÊT SIMPLE À 22H00 sans fermeture forcée"""
         try:
             current_time = datetime.now()
             current_hour = current_time.hour
@@ -1767,46 +1781,25 @@ class M5PullbackBot:
             current_time_decimal = current_hour + (current_minute / 60.0)  # Conversion en décimal pour 00h20 = 0.33
             current_weekday = current_time.weekday()  # 0=Lundi, 4=Vendredi, 6=Dimanche
             
-            # 🔴 FERMETURE FORCÉE VENDREDI 22H30 (fin de semaine Forex)
-            if current_weekday == 4 and current_time_decimal >= 22.5:  # Vendredi 22h30
-                safe_log(f"📅 FERMETURE HEBDOMADAIRE - Vendredi 22h30 atteinte")
-                safe_log(f"🔴 FERMETURE FORCÉE DE TOUTES LES POSITIONS AVANT WEEK-END")
-                
-                # Fermeture immédiate de toutes les positions (profitables ET perdantes)
-                closed_count = self.close_all_positions_friday_end()
-                
-                if closed_count > 0:
-                    safe_log(f"✅ {closed_count} positions fermées pour le week-end")
-                else:
-                    safe_log(f"ℹ️ Aucune position à fermer")
-                
-                safe_log(f"⏸️ Trading suspendu jusqu'à lundi 00h20")
-                self.is_trading_paused = True
-                
-                return False  # Trading arrêté pour le week-end
-            
-            # Vérification si on doit fermer à 22h50 avec SYSTÈME SPÉCIAL
+            # 🌙 ARRÊT SIMPLE DU TRADING À 22H00 - PLUS DE FERMETURE FORCÉE
             if current_time_decimal >= self.daily_close_time and not self.is_trading_paused:
-                safe_log(f"🕐 FERMETURE AUTOMATIQUE SPÉCIALE - 22h50 atteinte")
-                safe_log(f"📋 Actions spéciales 22h50:")
-                safe_log(f"   1️⃣ ARRÊT du trading (pas de nouveaux trades)")
-                safe_log(f"   2️⃣ SUPPRESSION des SL sur toutes les positions")
-                safe_log(f"   3️⃣ FERMETURE automatique des positions PROFITABLES seulement")
-                safe_log(f"   4️⃣ Pause trading jusqu'à 00h20")
+                safe_log(f"🕐 ARRÊT AUTOMATIQUE DU TRADING - 22h00 atteinte")
+                safe_log(f"📋 Nouveau comportement 22h00:")
+                safe_log(f"   ✅ ARRÊT du trading (pas de nouveaux trades)")
+                safe_log(f"   🎯 Positions MAINTENUES avec leurs SL/TP")
+                safe_log(f"   🔄 Trailing stop CONTINUE de fonctionner")
+                safe_log(f"   ⏸️ Reprise du trading à 00h20")
                 
-                # Activation du système spécial 22h50
-                self.activate_21h30_special_mode()
-                
-                # Activation de la pause nocturne
+                # Activation de la pause nocturne (trading seulement)
                 self.is_trading_paused = True
                 
-                safe_log(f"✅ SYSTÈME 21H30 ACTIVÉ:")
-                safe_log(f"   � Trading STOPPÉ")
-                safe_log(f"   🔧 SL supprimés sur toutes positions")
-                safe_log(f"   💰 Fermeture automatique des profits")
-                safe_log(f"   ⏸️ Pause jusqu'à 7h30")
+                safe_log(f"✅ MODE NUIT ACTIVÉ:")
+                safe_log(f"   🚫 Trading STOPPÉ")
+                safe_log(f"   🎯 Positions en cours: MAINTENUES")
+                safe_log(f"   � SL/TP: ACTIFS")
+                safe_log(f"   ⏰ Reprise: 00h20")
                 
-                return False  # Trading arrêté
+                return False  # Trading arrêté, mais positions maintenues
             
             # Vérification si on peut reprendre à 7h30 (sauf week-end)
             elif current_time_decimal >= self.daily_start_time and current_time_decimal < self.daily_close_time and self.is_trading_paused:
@@ -2323,7 +2316,7 @@ class M5PullbackBot:
         
         NOUVELLE STRATÉGIE:
         - Risque augmenté : 3.75% de l'equity par trade (vs 2.5% avant)
-        - Logic : TP plafonnés à 180 points = moins de risque réel
+        - Logic : TP plafonnés à 200 points = moins de risque réel
         - SL plus grands = meilleure protection
         - Plus de volume = plus de profits sur petits mouvements
         
@@ -2356,9 +2349,9 @@ class M5PullbackBot:
             lot_size = min(lot_size, ADAPTIVE_LOT_MAX)  # Maximum sécurité
             
             # Log informatif avec nouveaux paramètres
-            tp_potential = 180 * 0.01 * 100 * lot_size  # 180 points max de profit
+            tp_potential = TP_MAX_POINTS * 0.01 * 100 * lot_size  # 200 points max de profit
             safe_log(f"� LOT AGRESSIF: Equity ${current_equity:.0f} → Lot {lot_size:.2f} (risque {enhanced_risk_percent:.1f}%)")
-            safe_log(f"   💰 Risque max: -${max_loss_per_trade:.0f} | Profit TP: +${tp_potential:.0f} (180pts max)")
+            safe_log(f"   💰 Risque max: -${max_loss_per_trade:.0f} | Profit TP: +${tp_potential:.0f} (200pts max)")
             safe_log(f"   🎯 Stratégie: TP petits + SL grands + Lots élevés")
             
             return lot_size
@@ -2596,7 +2589,7 @@ class M5PullbackBot:
         # 🔥 NOUVELLE STRATÉGIE : SL GRANDS + TP PLAFONNÉS + LOTS ÉLEVÉS
         sl_distance = ATR_SL_MULTIPLIER * atr_value  # SL plus grand à 2.5x ATR
         
-        # 🎯 TP PLAFONNÉ À 180 POINTS MAXIMUM
+        # 🎯 TP PLAFONNÉ À 200 POINTS MAXIMUM
         trend_strength = signal.get('strength', 50)  # Force de la tendance (défaut 50%)
         tp_distance = self.calculate_market_aware_tp_ratio(trend_strength, atr_value, sl_distance)
         
