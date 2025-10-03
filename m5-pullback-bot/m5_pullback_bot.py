@@ -378,33 +378,34 @@ class M5PullbackBot:
         try:
             account_info = mt5.account_info()
             if not account_info:
-                safe_log("⚠️ Impossible de récupérer balance, MAX_POSITIONS par défaut: 3")
+                safe_log("⚠️ Impossible de récupérer equity, MAX_POSITIONS par défaut: 3")
                 return 3
             
-            balance = account_info.balance
+            # 💰 UTILISATION DE L'EQUITY (moyens réels) au lieu de la balance
+            equity = account_info.equity
             
             # � LIMITE FIXE OPTIMISÉE POUR ÉVITER "NO MONEY"
-            # 🔒 LIMITE ADAPTÉE À LA BALANCE
-            if balance < 2000:
-                max_positions_final = 2  # Faible balance = prudence
-            elif balance < 5000:
-                max_positions_final = 4  # Balance moyenne = croissance
-            elif balance < 10000:
-                max_positions_final = 6  # Bonne balance = expansion
+            # 🔒 LIMITE ADAPTÉE À L'EQUITY (moyens réels)
+            if equity < 2000:
+                max_positions_final = 2  # Faibles moyens = prudence
+            elif equity < 5000:
+                max_positions_final = 4  # Moyens moyens = croissance
+            elif equity < 10000:
+                max_positions_final = 6  # Bons moyens = expansion
             else:
-                max_positions_final = 8  # Forte balance = diversification
+                max_positions_final = 8  # Forts moyens = diversification
             
             # �️ CALCUL INFORMATIF SEULEMENT
-            risque_acceptable = balance * 0.025  # 2.5% de la balance par position
+            risque_acceptable = equity * 0.025  # 2.5% de l'equity par position
             perte_par_position = risque_acceptable  # Perte estimée par position
             risque_total_max = perte_par_position * max_positions_final
             
             safe_log(f"🧮 POSITION SIZING ADAPTATIF:")
-            safe_log(f"   💰 Balance: {balance:.2f}€")
+            safe_log(f"   💰 Equity: {equity:.2f}€")
             safe_log(f"   � Niveau de balance: {'Faible' if balance < 2000 else 'Moyenne' if balance < 5000 else 'Bonne' if balance < 10000 else 'Forte'}")
             safe_log(f"   � Max positions adaptées: {max_positions_final}")
             safe_log(f"   �️ Risque par position (2.5%): {risque_acceptable:.2f}€")
-            safe_log(f"   💸 Risque total maximum: {risque_total_max:.2f}€ ({(risque_total_max/balance*100):.1f}% de la balance)")
+            safe_log(f"   💸 Risque total maximum: {risque_total_max:.2f}€ ({(risque_total_max/equity*100):.1f}% de l'equity)")
             safe_log(f"   ✅ Optimisation intelligente activée")
             
             return max_positions_final
@@ -466,14 +467,14 @@ class M5PullbackBot:
             if not account_info:
                 return 0.5  # Standard par défaut
             
-            # Calcul des performances journalières
-            balance_start = getattr(self, 'balance_start', account_info.balance)
-            current_balance = account_info.balance
-            daily_performance = ((current_balance - balance_start) / balance_start) * 100
+            # Calcul des performances journalières basées sur l'equity
+            equity_start = getattr(self, 'equity_start', account_info.equity)
+            current_equity = account_info.equity
+            daily_performance = ((current_equity - equity_start) / equity_start) * 100
             
             # Calcul du profit temps réel
             current_profit = self.calculate_real_time_daily_profit()
-            profit_pct = (current_profit / balance_start) * 100 if balance_start > 0 else 0
+            profit_pct = (current_profit / equity_start) * 100 if equity_start > 0 else 0
             
             # Logique adaptative
             if profit_pct >= 2.0:
@@ -2139,13 +2140,13 @@ class M5PullbackBot:
     
     def calculate_adaptive_lot_size(self, atr_sl_distance):
         """
-        🚀 CALCUL LOT ADAPTATIF AGRESSIF - Risque 3.5% par trade
-        =======================================================
+        🚀 CALCUL LOT ADAPTATIF AGRESSIF - Risque 2.5% par trade (basé sur EQUITY)
+        ============================================================================
         
-        Approche agressive mais sécurisée:
-        - Risque 3.5% de la balance par trade (vs 1-2% standard)
-        - Sécurité garantie par l'arrêt automatique à -5% balance
-        - Maximum 1.4 trades perdants avant déclenchement sécurité
+        Approche agressive mais sécurisée basée sur l'equity (moyens réels):
+        - Risque 2.5% de l'equity par trade (vs 1-2% standard)
+        - Utilise l'equity au lieu de la balance pour plus de précision
+        - Sécurité garantie par l'arrêt automatique à -5% equity
         
         Args:
             atr_sl_distance: Distance du Stop Loss basée sur l'ATR
@@ -2157,13 +2158,13 @@ class M5PullbackBot:
             # Récupération de la balance actuelle
             account_info = mt5.account_info()
             if not account_info:
-                safe_log("⚠️ Impossible de récupérer la balance - Lot par défaut: 0.01")
+                safe_log("⚠️ Impossible de récupérer l'equity - Lot par défaut: 0.01")
                 return 0.01
             
-            current_balance = account_info.balance
+            current_equity = account_info.equity
             
-            # Calcul du risque maximal par trade (3.5% agressif)
-            max_loss_per_trade = current_balance * (ADAPTIVE_LOT_RISK_PERCENT / 100)
+            # Calcul du risque maximal par trade (2.5% basé sur equity)
+            max_loss_per_trade = current_equity * (ADAPTIVE_LOT_RISK_PERCENT / 100)
             
             # Calcul du lot nécessaire
             # Pour XAUUSD: 1 lot = 100$/point, donc lot = max_loss / (sl_distance * 100)
@@ -2176,7 +2177,7 @@ class M5PullbackBot:
             
             # Log informatif
             profit_potential = max_loss_per_trade * 2  # Ratio 1:2
-            safe_log(f"🚀 LOT ADAPTATIF OPTIMISÉ: Balance ${current_balance:.0f} → Lot {lot_size:.2f}")
+            safe_log(f"🚀 LOT ADAPTATIF OPTIMISÉ: Equity ${current_equity:.0f} → Lot {lot_size:.2f}")
             safe_log(f"   💰 Risque: -${max_loss_per_trade:.0f} (2.5%) | Profit potentiel: +${profit_potential:.0f}")
             
             return lot_size
