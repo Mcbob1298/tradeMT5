@@ -76,12 +76,12 @@ print("=" * 60)
 # CONFIGURATION ULTRA SCALPING - ARGENT RÉEL
 # =============================================================================
 ENABLE_REAL_TRADING = True   # ✅ TRADING RÉEL ACTIVÉ - ARGENT RÉEL
-# MT5_LOGIN = 18491073       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
-# MT5_PASSWORD = "mr^WV%U8"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
-# MT5_SERVER = "VantageInternational-Live 4"  # ⚠️ TODO: Vérifier le serveur RÉEL
-MT5_LOGIN = 10007787600       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
-MT5_PASSWORD = "G@Vv0mNf"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
-MT5_SERVER = "MetaQuotes-Demo"  # ⚠️ TODO: Vérifier le serveur RÉEL
+MT5_LOGIN = 18491073       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
+MT5_PASSWORD = "mr^WV%U8"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
+MT5_SERVER = "VantageInternational-Live 4"  # ⚠️ TODO: Vérifier le serveur RÉEL
+# MT5_LOGIN = 10007787600       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
+# MT5_PASSWORD = "G@Vv0mNf"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
+# MT5_SERVER = "MetaQuotes-Demo"  # ⚠️ TODO: Vérifier le serveur RÉEL
 # 🚫 MODE SIMULATION DÉSACTIVÉ - TRADING RÉEL
 SIMULATE_BALANCE = 500.0     # ❌ Non utilisé en mode réel
 USE_SIMULATION_MODE = False  # ❌ MODE SIMULATION DÉSACTIVÉ
@@ -384,24 +384,117 @@ class M5PullbackBot:
             balance = account_info.balance
             
             # � LIMITE FIXE OPTIMISÉE POUR ÉVITER "NO MONEY"
-            max_positions_final = MAX_POSITIONS  # 3 positions max
+            # 🔒 LIMITE ADAPTÉE À LA BALANCE
+            if balance < 2000:
+                max_positions_final = 2  # Faible balance = prudence
+            elif balance < 5000:
+                max_positions_final = 4  # Balance moyenne = croissance
+            elif balance < 10000:
+                max_positions_final = 6  # Bonne balance = expansion
+            else:
+                max_positions_final = 8  # Forte balance = diversification
             
             # �️ CALCUL INFORMATIF SEULEMENT
             risque_acceptable = balance * 0.025  # 2.5% de la balance par position
             perte_par_position = risque_acceptable  # Perte estimée par position
+            risque_total_max = perte_par_position * max_positions_final
             
-            safe_log(f"🧮 POSITION SIZING OPTIMISÉ:")
+            safe_log(f"🧮 POSITION SIZING ADAPTATIF:")
             safe_log(f"   💰 Balance: {balance:.2f}€")
-            safe_log(f"   🛡️ Risque par position (2.5%): {risque_acceptable:.2f}€")
-            safe_log(f"   💸 Perte maximale: {perte_par_position:.2f}€")
-            safe_log(f"   🔢 Max positions: {max_positions_final} (limite optimisée)")
-            safe_log(f"   ✅ Protection 'No money' activée")
+            safe_log(f"   � Niveau de balance: {'Faible' if balance < 2000 else 'Moyenne' if balance < 5000 else 'Bonne' if balance < 10000 else 'Forte'}")
+            safe_log(f"   � Max positions adaptées: {max_positions_final}")
+            safe_log(f"   �️ Risque par position (2.5%): {risque_acceptable:.2f}€")
+            safe_log(f"   💸 Risque total maximum: {risque_total_max:.2f}€ ({(risque_total_max/balance*100):.1f}% de la balance)")
+            safe_log(f"   ✅ Optimisation intelligente activée")
             
             return max_positions_final
             
         except Exception as e:
             safe_log(f"❌ Erreur calcul max positions adaptatif: {e}")
             return 20  # Valeur par défaut en cas d'erreur
+    
+    def calculate_adaptive_tp_ratio(self, trend_strength):
+        """
+        🎯 CALCUL DU RATIO TP/SL ADAPTATIF SELON LA FORCE DE LA TENDANCE
+        ================================================================
+        
+        Logique intelligente:
+        - Tendance faible (0-50%) : Ratio 1:2.0 (standard - sécurise rapidement)
+        - Tendance forte (50-80%) : Ratio 1:2.5 (profite de l'élan)
+        - Tendance très forte (80%+) : Ratio 1:3.0 (maximise les gains exceptionnels)
+        
+        Args:
+            trend_strength (float): Force de la tendance entre 0 et 100%
+            
+        Returns:
+            float: Ratio TP/SL adaptatif
+        """
+        try:
+            if trend_strength >= 80:
+                tp_ratio = 3.0  # 🚀 Tendance très forte - maximiser profits
+                strength_level = "TRÈS FORTE"
+            elif trend_strength >= 50:
+                tp_ratio = 2.5  # ⚡ Tendance forte - profiter de l'élan
+                strength_level = "FORTE"
+            else:
+                tp_ratio = 2.0  # 🛡️ Tendance faible - sécuriser rapidement
+                strength_level = "FAIBLE/MOYENNE"
+            
+            safe_log(f"🎯 TP ADAPTATIF: Tendance {strength_level} ({trend_strength:.1f}%) → Ratio 1:{tp_ratio}")
+            return tp_ratio
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur calcul TP adaptatif: {e}, utilisation ratio par défaut 2.0")
+            return 2.0  # Fallback sur ratio standard
+    
+    def calculate_adaptive_breakeven_sl(self):
+        """
+        🔒 CALCUL DU SL BREAKEVEN ADAPTATIF SELON LES PERFORMANCES
+        =========================================================
+        
+        Logique intelligente basée sur les performances du compte:
+        - Performances excellentes (>+2%) : SL très agressif (80% du profit)
+        - Performances bonnes (+0.5% à +2%) : SL agressif (60% du profit)  
+        - Performances moyennes (0% à +0.5%) : SL standard (50% du profit)
+        - Performances négatives (<0%) : SL conservateur (30% du profit)
+        
+        Returns:
+            float: Pourcentage du profit à sécuriser (0.3 à 0.8)
+        """
+        try:
+            account_info = mt5.account_info()
+            if not account_info:
+                return 0.5  # Standard par défaut
+            
+            # Calcul des performances journalières
+            balance_start = getattr(self, 'balance_start', account_info.balance)
+            current_balance = account_info.balance
+            daily_performance = ((current_balance - balance_start) / balance_start) * 100
+            
+            # Calcul du profit temps réel
+            current_profit = self.calculate_real_time_daily_profit()
+            profit_pct = (current_profit / balance_start) * 100 if balance_start > 0 else 0
+            
+            # Logique adaptative
+            if profit_pct >= 2.0:
+                sl_ratio = 0.8  # 🚀 Performances excellentes - très agressif
+                performance_level = "EXCELLENTES"
+            elif profit_pct >= 0.5:
+                sl_ratio = 0.6  # ⚡ Bonnes performances - agressif  
+                performance_level = "BONNES"
+            elif profit_pct >= 0.0:
+                sl_ratio = 0.5  # 📈 Performances moyennes - standard
+                performance_level = "MOYENNES"
+            else:
+                sl_ratio = 0.3  # 🛡️ Performances négatives - conservateur
+                performance_level = "NÉGATIVES"
+            
+            safe_log(f"🔒 SL BREAKEVEN ADAPTATIF: Performances {performance_level} ({profit_pct:+.2f}%) → {sl_ratio*100:.0f}% profit sécurisé")
+            return sl_ratio
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur calcul SL breakeven adaptatif: {e}, utilisation ratio standard 0.5")
+            return 0.5  # Fallback sur ratio standard
     
     # Méthode get_simulated_balance supprimée - Plus utilisée en mode argent réel
     
@@ -1145,8 +1238,9 @@ class M5PullbackBot:
                 # 🎯 SEUIL AGRESSIF : 75% du TP (au lieu de pips fixes)
                 if tp_progress_pct >= 75.0:
                     
-                    # Calcul du SL agressif : 50% du profit potentiel
-                    target_profit_distance = tp_distance * 0.5  # 50% du TP
+                    # 🚀 NOUVEAU : SL ADAPTATIF selon les performances
+                    adaptive_sl_ratio = self.calculate_adaptive_breakeven_sl()
+                    target_profit_distance = tp_distance * adaptive_sl_ratio
                     new_sl_aggressive = entry_price + target_profit_distance
                     
                     # Vérification si le SL est déjà proche de cette valeur (déjà configuré)
@@ -1179,16 +1273,16 @@ class M5PullbackBot:
                                 new_sl_aggressive = current_price_ask - min_distance - (5 * symbol_info.point)
                                 safe_log(f"   ⚠️ SL ajusté pour respecter stops_level: {new_sl_aggressive:.5f}")
                             
-                            # Calcul du profit garanti
+                            # Calcul du profit garanti avec système adaptatif
                             guaranteed_profit_distance = new_sl_aggressive - entry_price
                             guaranteed_profit_pips = guaranteed_profit_distance / 0.01
-                            safe_log(f"   🎯 SL agressif: {new_sl_aggressive:.3f} (50% du profit potentiel)")
-                            safe_log(f"   � Profit garanti: +{guaranteed_profit_pips:.1f} pips (au lieu de 0)")
+                            safe_log(f"   🎯 SL adaptatif: {new_sl_aggressive:.3f} ({adaptive_sl_ratio*100:.0f}% du profit selon performances)")
+                            safe_log(f"   💰 Profit garanti: +{guaranteed_profit_pips:.1f} pips (adaptatif)")
                         else:
-                            # Fallback
+                            # Fallback avec système adaptatif
                             guaranteed_profit_distance = new_sl_aggressive - entry_price
                             guaranteed_profit_pips = guaranteed_profit_distance / 0.01
-                            safe_log(f"   🎯 SL agressif: {new_sl_aggressive:.3f} (50% profit)")
+                            safe_log(f"   🎯 SL adaptatif: {new_sl_aggressive:.3f} ({adaptive_sl_ratio*100:.0f}% profit)")
                             safe_log(f"   💰 Profit garanti: +{guaranteed_profit_pips:.1f} pips")
                         
                         # Modification de la position sur MT5
@@ -1231,16 +1325,19 @@ class M5PullbackBot:
                     if tp_distance > 0:
                         tp_progress_pct = (current_profit_distance / tp_distance) * 100
                         
-                        # Breakeven à 75% du TP
+                        # Breakeven à 75% du TP avec SL adaptatif
                         if tp_progress_pct >= 75.0:
-                            target_profit_distance = tp_distance * 0.5
+                            # 🚀 NOUVEAU : SL ADAPTATIF selon les performances (SELL)
+                            adaptive_sl_ratio = self.calculate_adaptive_breakeven_sl()
+                            target_profit_distance = tp_distance * adaptive_sl_ratio
                             new_sl_aggressive = entry_price - target_profit_distance
                             
                             # Vérification si SL doit être mis à jour
                             sl_needs_update = (mt5_position.sl == 0 or mt5_position.sl > new_sl_aggressive)
                             
                             if sl_needs_update:
-                                safe_log(f"🔍 BREAKEVEN SELL - Ticket {ticket}: {tp_progress_pct:.1f}% TP atteint")
+                                safe_log(f"🔍 BREAKEVEN SELL ADAPTATIF - Ticket {ticket}: {tp_progress_pct:.1f}% TP atteint")
+                                safe_log(f"   🎯 SL adaptatif SELL: {new_sl_aggressive:.3f} ({adaptive_sl_ratio*100:.0f}% profit selon performances)")
                                 
                                 request = {
                                     "action": mt5.TRADE_ACTION_SLTP,
@@ -2288,9 +2385,13 @@ class M5PullbackBot:
         else:  # SELL
             entry_price = tick_info.bid
         
-        # 🎯 CALCUL TP/SL ADAPTATIFS BASÉS SUR L'ATR
+        # 🎯 CALCUL TP/SL ADAPTATIFS BASÉS SUR L'ATR ET LA FORCE DE LA TENDANCE
         sl_distance = ATR_SL_MULTIPLIER * atr_value  # SL à 1.5x ATR
-        tp_distance = ATR_TP_RATIO * sl_distance     # TP à 2x le SL (ratio 1:2)
+        
+        # 🚀 NOUVEAU : TP ADAPTATIF selon la force de la tendance
+        trend_strength = signal.get('strength', 50)  # Force de la tendance (défaut 50%)
+        adaptive_tp_ratio = self.calculate_adaptive_tp_ratio(trend_strength)
+        tp_distance = adaptive_tp_ratio * sl_distance  # TP adaptatif selon la force
         
         # Application selon le type d'ordre
         if trade_type == 'BUY':
@@ -2304,13 +2405,14 @@ class M5PullbackBot:
         sl_pips = sl_distance / 0.1
         tp_pips = tp_distance / 0.1
         
-        # 🎯 LOG DÉTAILLÉ DE LA STRATÉGIE M5
+        # 🎯 LOG DÉTAILLÉ DE LA STRATÉGIE M5 AVEC TP ADAPTATIF
         safe_log(f"⚡ TRADE M5 {trade_type} - {signal['reason']}")
         safe_log(f"   📊 ATR actuel: {atr_value:.3f} (volatilité du marché)")
+        safe_log(f"   🎯 Force tendance: {trend_strength:.1f}% → Ratio TP adaptatif 1:{adaptive_tp_ratio}")
         safe_log(f"   💰 Prix entrée: ${entry_price:.2f}")
         safe_log(f"   🛡️ SL adaptatif: ${sl_price:.2f} ({sl_pips:.1f} pips = 1.5x ATR)")
-        safe_log(f"   🎯 TP adaptatif: ${tp_price:.2f} ({tp_pips:.1f} pips = 3x ATR)")
-        safe_log(f"   ⚖️ Ratio R/R: 1:2.0 (PROFESSIONNEL)")
+        safe_log(f"   🚀 TP adaptatif: ${tp_price:.2f} ({tp_pips:.1f} pips = {adaptive_tp_ratio}x SL)")
+        safe_log(f"   ⚖️ Ratio R/R: 1:{adaptive_tp_ratio} (ADAPTATIF selon force tendance)")
         safe_log(f"   📈 Force signal: {signal['strength']:.1f}%")
         safe_log(f"   🎯 Qualité pullback: {signal['pullback_quality']:.1f}%")
         safe_log(f"   📊 RSI: {signal['rsi']:.1f}")
