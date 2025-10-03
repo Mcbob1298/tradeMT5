@@ -92,7 +92,7 @@ TIMEFRAME = mt5.TIMEFRAME_M5    # 🕒 5 minutes (qualité > quantité)
 LOT_SIZE = "ADAPTIVE"           # 🚀 LOT ADAPTATIF AGRESSIF (3.5% risque par trade)
 USE_STOP_LOSS = True            # ✅ STOP LOSS OBLIGATOIRE EN ARGENT RÉEL
 MAX_POSITIONS = 3               # 🔒 Max 3 positions simultanées (optimisé pour éviter "No money")
-ANALYSIS_INTERVAL = 60          # 🕒 Analyse toutes les 60 secondes (M5 = moins de bruit)
+ANALYSIS_INTERVAL = 30          # 🕒 Analyse toutes les 30 secondes (M5 = moins de bruit)
 
 # 🚀 GESTION LOT ADAPTATIF OPTIMISÉ
 ADAPTIVE_LOT_RISK_PERCENT = 2.5 # Risque 2.5% par trade (optimisé vs 3.5% trop agressif)
@@ -105,14 +105,15 @@ TREND_EMA_PULLBACK = 50         # EMA 50 - Zone de repli/rebond dynamique
 ATR_PERIOD = 14                 # ATR pour TP/SL adaptatifs selon volatilité
 RSI_PERIOD = 14                 # RSI standard (14 périodes)
 
-# 🎯 SEUILS PULLBACK INTELLIGENTS (Ajustés pour plus de sensibilité)
+# 🎯 STRATÉGIE RÉVISÉE : TP PETITS + SL GRANDS + LOTS ÉLEVÉS
 ATR_PULLBACK_MULTIPLIER = 4.5   # Distance max à l'EMA 50 (4.5x ATR - plus sensible pour plus d'opportunités)
-ATR_SL_MULTIPLIER = 1.5         # Stop Loss à 1.5x ATR
-ATR_TP_RATIO = 2.0              # Take Profit à 2x le SL (ratio 1:2)
+ATR_SL_MULTIPLIER = 2.5         # 🔥 SL plus grand à 2.5x ATR (plus de respiration)
+TP_MAX_POINTS = 180             # 🎯 TP maximum : 180 points (18 pips) - PLAFONNÉ
+RISK_MULTIPLIER = 1.5           # 💰 Multiplicateur de risque augmenté (lots plus élevés)
 
 # 🎯 ZONES RSI POUR PULLBACK
-RSI_BUY_MIN = 40               # RSI minimum pour BUY (momentum sain)
-RSI_BUY_MAX = 55               # RSI maximum pour BUY (pas de surachat)
+RSI_BUY_MIN = 35               # RSI minimum pour BUY (momentum sain)
+RSI_BUY_MAX = 60               # RSI maximum pour BUY (pas de surachat excessif)
 RSI_SELL_MIN = 45              # RSI minimum pour SELL (faiblesse confirmée)
 RSI_SELL_MAX = 60              # RSI maximum pour SELL (rebond s'essoufle)
 
@@ -457,60 +458,73 @@ class M5PullbackBot:
             safe_log(f"❌ Erreur calcul TP adaptatif: {e}, utilisation ratio par défaut 1.5")
             return 1.5  # Fallback sur ratio réaliste
     
-    def calculate_market_aware_tp_ratio(self, trend_strength, atr_value):
+    def calculate_market_aware_tp_ratio(self, trend_strength, atr_value, sl_distance):
         """
-        🎯 TP ULTRA-RÉALISTE : Tendance + Volatilité du marché
-        =====================================================
+        🎯 TP PLAFONNÉ À 180 POINTS : Stratégie Révisée
+        ===============================================
         
-        Système révolutionnaire qui adapte le TP selon:
-        1. Force de la tendance (fiabilité du signal)
-        2. Volatilité actuelle (ATR - faisabilité du mouvement)
+        NOUVELLE STRATÉGIE:
+        - TP maximum : 180 points (18 pips) TOUJOURS respecté
+        - SL plus grand (2.5x ATR) pour respiration
+        - Lots augmentés car TP plus petits = moins de risque par trade
         
-        Logique:
-        - ATR faible (< 2.0) : Marché calme → TP plus conservateurs
-        - ATR normale (2.0-4.0) : Marché standard → TP équilibrés  
-        - ATR élevée (> 4.0) : Marché agité → TP plus ambitieux possible
+        Logic:
+        1. Calcule un TP basé sur tendance + volatilité  
+        2. PLAFONNE à 180 points maximum
+        3. Adapte selon les conditions de marché
         
         Args:
             trend_strength (float): Force de la tendance (0-100%)
             atr_value (float): Valeur ATR actuelle
+            sl_distance (float): Distance du SL en price
             
         Returns:
-            float: Ratio TP/SL ultra-adaptatif
+            float: Distance TP réelle (plafonnée à 180 points)
         """
         try:
-            # Base du ratio selon la force de tendance (version réaliste)
+            # 🎯 PLAFOND ABSOLU : 180 points maximum
+            max_tp_distance = 180 * 0.01  # 180 points = 1.80 en price pour XAUUSD
+            
+            # Base du ratio selon la force de tendance
             if trend_strength >= 80:
-                base_ratio = 2.0  # Très forte
+                base_ratio = 1.8  # Très forte mais plafonné
             elif trend_strength >= 50:
-                base_ratio = 1.5  # Forte
+                base_ratio = 1.4  # Forte
             else:
-                base_ratio = 1.2  # Faible
+                base_ratio = 1.1  # Faible
             
             # Ajustement selon la volatilité (ATR)
             if atr_value < 2.0:
-                # Marché très calme - réduire les attentes
                 volatility_factor = 0.8
                 volatility_desc = "CALME"
             elif atr_value > 4.0:
-                # Marché très volatil - peut viser un peu plus haut
                 volatility_factor = 1.1
                 volatility_desc = "AGITÉ"
             else:
-                # Volatilité normale
                 volatility_factor = 1.0
                 volatility_desc = "NORMALE"
             
-            # Calcul final avec plafond de sécurité
-            final_ratio = base_ratio * volatility_factor
-            final_ratio = min(final_ratio, 2.2)  # Plafond absolu à 2.2 pour rester réaliste
+            # Calcul du TP théorique
+            theoretical_tp = base_ratio * volatility_factor * sl_distance
             
-            safe_log(f"🎯 TP MARKET-AWARE: Tendance {trend_strength:.1f}% + ATR {atr_value:.2f} ({volatility_desc}) = Ratio 1:{final_ratio:.2f}")
-            return final_ratio
+            # 🔥 APPLICATION DU PLAFOND : Jamais plus de 180 points
+            final_tp_distance = min(theoretical_tp, max_tp_distance)
+            
+            # Calcul du ratio réel
+            actual_ratio = final_tp_distance / sl_distance
+            
+            # Stats pour logging
+            is_capped = final_tp_distance == max_tp_distance
+            cap_status = "🔥 PLAFONNÉ" if is_capped else "✅ LIBRE"
+            
+            safe_log(f"🎯 TP PLAFONNÉ: {cap_status} | Théorique {theoretical_tp:.3f} → Réel {final_tp_distance:.3f}")
+            safe_log(f"   📊 ATR {atr_value:.2f} ({volatility_desc}) | Ratio final 1:{actual_ratio:.2f}")
+            
+            return final_tp_distance
             
         except Exception as e:
-            safe_log(f"❌ Erreur calcul TP market-aware: {e}")
-            return 1.5  # Fallback sécuritaire
+            safe_log(f"❌ Erreur calcul TP plafonné: {e}")
+            return min(1.5 * sl_distance, 180 * 0.01)  # Fallback sécuritaire
     
     def calculate_adaptive_breakeven_sl(self):
         """
@@ -1237,7 +1251,7 @@ class M5PullbackBot:
         Principe Ultra-Agressif : Protection dès 30% + Adaptation continue
         
         Étapes de protection :
-        1️⃣ 30% du TP → SL à breakeven (0% perte assurée)
+        1️⃣ 30% du TP → SL à 10% du profit (gain minimum sécurisé)
         2️⃣ 50% du TP → SL à 25% du profit (gain partiel sécurisé)
         3️⃣ 75% du TP → SL à 50% du profit (gain substantiel)
         4️⃣ 90% du TP → SL à 75% du profit (quasi TP sécurisé)
@@ -1318,9 +1332,9 @@ class M5PullbackBot:
                         sl_profit_ratio = 0.25
                         phase = "PROGRESSION (25% profit)"
                     else:
-                        # Premier niveau (30-50%) → Breakeven (0% perte)
-                        sl_profit_ratio = 0.0
-                        phase = "BREAKEVEN (0% perte)"
+                        # Premier niveau (30-50%) → 10% du TP sécurisé (au lieu de 0%)
+                        sl_profit_ratio = 0.10
+                        phase = "SÉCURISÉ (10% profit)"
                     
                     # Calcul du nouveau SL selon la phase
                     target_profit_distance = tp_distance * sl_profit_ratio
@@ -1467,8 +1481,9 @@ class M5PullbackBot:
                         sl_profit_ratio = 0.25
                         phase = "PROGRESSION (25% profit)"
                     else:
-                        sl_profit_ratio = 0.0
-                        phase = "BREAKEVEN (0% perte)"
+                        # Premier niveau (30-50%) → 10% du TP sécurisé (au lieu de 0%)
+                        sl_profit_ratio = 0.10
+                        phase = "SÉCURISÉ (10% profit)"
                     
                     # Pour SELL : SL = entry_price - (tp_distance * ratio)
                     target_profit_distance = tp_distance * sl_profit_ratio
@@ -2303,19 +2318,20 @@ class M5PullbackBot:
     
     def calculate_adaptive_lot_size(self, atr_sl_distance):
         """
-        🚀 CALCUL LOT ADAPTATIF AGRESSIF - Risque 2.5% par trade (basé sur EQUITY)
-        ============================================================================
+        � CALCUL LOT AGRESSIF - TP PETITS = LOTS PLUS ÉLEVÉS
+        =====================================================
         
-        Approche agressive mais sécurisée basée sur l'equity (moyens réels):
-        - Risque 2.5% de l'equity par trade (vs 1-2% standard)
-        - Utilise l'equity au lieu de la balance pour plus de précision
-        - Sécurité garantie par l'arrêt automatique à -5% equity
+        NOUVELLE STRATÉGIE:
+        - Risque augmenté : 3.75% de l'equity par trade (vs 2.5% avant)
+        - Logic : TP plafonnés à 180 points = moins de risque réel
+        - SL plus grands = meilleure protection
+        - Plus de volume = plus de profits sur petits mouvements
         
         Args:
             atr_sl_distance: Distance du Stop Loss basée sur l'ATR
             
         Returns:
-            float: Taille de lot optimale (0.01 à 1.0)
+            float: Taille de lot optimale (augmentée)
         """
         try:
             # Récupération de la balance actuelle
@@ -2326,8 +2342,9 @@ class M5PullbackBot:
             
             current_equity = account_info.equity
             
-            # Calcul du risque maximal par trade (2.5% basé sur equity)
-            max_loss_per_trade = current_equity * (ADAPTIVE_LOT_RISK_PERCENT / 100)
+            # 🔥 NOUVEAU : Risque augmenté pour TP plus petits
+            enhanced_risk_percent = 2.5 * RISK_MULTIPLIER  # 2.5% * 1.5 = 3.75%
+            max_loss_per_trade = current_equity * (enhanced_risk_percent / 100)
             
             # Calcul du lot nécessaire
             # Pour XAUUSD: 1 lot = 100$/point, donc lot = max_loss / (sl_distance * 100)
@@ -2338,10 +2355,11 @@ class M5PullbackBot:
             lot_size = max(lot_size, ADAPTIVE_LOT_MIN)  # Minimum broker
             lot_size = min(lot_size, ADAPTIVE_LOT_MAX)  # Maximum sécurité
             
-            # Log informatif
-            profit_potential = max_loss_per_trade * 2  # Ratio 1:2
-            safe_log(f"🚀 LOT ADAPTATIF OPTIMISÉ: Equity ${current_equity:.0f} → Lot {lot_size:.2f}")
-            safe_log(f"   💰 Risque: -${max_loss_per_trade:.0f} (2.5%) | Profit potentiel: +${profit_potential:.0f}")
+            # Log informatif avec nouveaux paramètres
+            tp_potential = 180 * 0.01 * 100 * lot_size  # 180 points max de profit
+            safe_log(f"� LOT AGRESSIF: Equity ${current_equity:.0f} → Lot {lot_size:.2f} (risque {enhanced_risk_percent:.1f}%)")
+            safe_log(f"   💰 Risque max: -${max_loss_per_trade:.0f} | Profit TP: +${tp_potential:.0f} (180pts max)")
+            safe_log(f"   🎯 Stratégie: TP petits + SL grands + Lots élevés")
             
             return lot_size
             
@@ -2463,15 +2481,22 @@ class M5PullbackBot:
         if (trend == "BULLISH" and 
             current_price > ema_master and  # Prix > EMA 200 (tendance de fond haussière)
             pullback_quality >= 60 and     # Prix proche de l'EMA 50 (pullback détecté)
-            RSI_BUY_MIN <= current_rsi <= RSI_BUY_MAX):  # RSI entre 40-55 (momentum sain)
+            current_rsi <= self.config['RSI_OVERBOUGHT']):  # RSI pas en surachat selon config
             
-            # Cooldown M5 adaptatif
+            # Cooldown M5 adaptatif avec logging amélioré
             cooldown = 300  # 5 minutes en M5
             
             if time_since_last_buy < cooldown:
                 remaining_time = cooldown - time_since_last_buy
-                safe_log(f"⏳ BUY Cooldown PULLBACK: {remaining_time:.0f}s restantes")
+                safe_log(f"⏳ BUY Cooldown PULLBACK: {remaining_time:.0f}s restantes (signal valide mais en attente)")
                 return None
+            
+            # 🎯 Signal BUY validé !
+            safe_log(f"🚀 SIGNAL BUY VALIDÉ! Toutes conditions remplies:")
+            safe_log(f"   📈 Tendance: {trend} {strength:.1f}%")
+            safe_log(f"   📊 RSI: {current_rsi:.1f} (<= {self.config['RSI_OVERBOUGHT']})")
+            safe_log(f"   🎯 Pullback: {pullback_quality:.0f}%")
+            safe_log(f"   ⏰ Cooldown: OK ({time_since_last_buy:.0f}s >= {cooldown}s)")
             
             return {
                 'type': 'BUY', 
@@ -2488,7 +2513,7 @@ class M5PullbackBot:
         elif (trend == "BEARISH" and 
               current_price < ema_master and  # Prix < EMA 200 (tendance de fond baissière)
               pullback_quality >= 60 and     # Prix proche de l'EMA 50 (rebond détecté)
-              RSI_SELL_MIN <= current_rsi <= RSI_SELL_MAX):  # RSI entre 45-60 (faiblesse confirmée)
+              current_rsi >= self.config['RSI_OVERSOLD']):  # RSI > 30 (rebond sur zone de survente)
             
             # Cooldown SELL adaptatif
             sell_cooldown = 300  # 5 minutes en M5
@@ -2497,6 +2522,13 @@ class M5PullbackBot:
                 remaining_time = sell_cooldown - time_since_last_sell
                 safe_log(f"⏳ SELL Cooldown PULLBACK: {remaining_time:.0f}s restantes")
                 return None
+            
+            # 🎯 Signal SELL validé !
+            safe_log(f"🔴 SIGNAL SELL VALIDÉ! Toutes conditions remplies:")
+            safe_log(f"   📈 Tendance: {trend} {strength:.1f}%")
+            safe_log(f"   📊 RSI: {current_rsi:.1f} (>= {self.config['RSI_OVERSOLD']})")
+            safe_log(f"   🎯 Pullback: {pullback_quality:.0f}%")
+            safe_log(f"   ⏰ Cooldown: OK ({time_since_last_sell:.0f}s >= {sell_cooldown}s)")
             
             return {
                 'type': 'SELL', 
@@ -2507,6 +2539,16 @@ class M5PullbackBot:
                 'atr': current_atr,
                 'confidence': min(strength + pullback_quality, 100) / 100
             }
+        
+        # 🐛 DEBUG: Pourquoi pas de SELL ? Loggons les conditions non remplies
+        if trend == "BEARISH":
+            safe_log(f"🔍 DEBUG BEARISH: Price={current_price:.2f}, EMA200={ema_master:.2f}, Pullback={pullback_quality:.0f}%, RSI={current_rsi:.1f}")
+            if current_price >= ema_master:
+                safe_log(f"   ❌ SELL bloqué: Prix {current_price:.2f} >= EMA200 {ema_master:.2f}")
+            elif pullback_quality < 60:
+                safe_log(f"   ❌ SELL bloqué: Pullback {pullback_quality:.0f}% < 60%")
+            elif current_rsi < self.config['RSI_OVERSOLD']:
+                safe_log(f"   ❌ SELL bloqué: RSI {current_rsi:.1f} < {self.config['RSI_OVERSOLD']}")
         
         # Aucune condition remplie
         return None
@@ -2551,13 +2593,12 @@ class M5PullbackBot:
         else:  # SELL
             entry_price = tick_info.bid
         
-        # 🎯 CALCUL TP/SL ADAPTATIFS BASÉS SUR L'ATR ET LA FORCE DE LA TENDANCE
-        sl_distance = ATR_SL_MULTIPLIER * atr_value  # SL à 1.5x ATR
+        # 🔥 NOUVELLE STRATÉGIE : SL GRANDS + TP PLAFONNÉS + LOTS ÉLEVÉS
+        sl_distance = ATR_SL_MULTIPLIER * atr_value  # SL plus grand à 2.5x ATR
         
-        # 🎯 NOUVEAU : TP ULTRA-RÉALISTE basé sur tendance ET volatilité
+        # 🎯 TP PLAFONNÉ À 180 POINTS MAXIMUM
         trend_strength = signal.get('strength', 50)  # Force de la tendance (défaut 50%)
-        adaptive_tp_ratio = self.calculate_market_aware_tp_ratio(trend_strength, atr_value)
-        tp_distance = adaptive_tp_ratio * sl_distance  # TP adaptatif selon marché
+        tp_distance = self.calculate_market_aware_tp_ratio(trend_strength, atr_value, sl_distance)
         
         # Application selon le type d'ordre
         if trade_type == 'BUY':
@@ -2571,14 +2612,18 @@ class M5PullbackBot:
         sl_pips = sl_distance / 0.1
         tp_pips = tp_distance / 0.1
         
-        # 🎯 LOG DÉTAILLÉ DE LA STRATÉGIE M5 AVEC TP MARKET-AWARE
+        # Calcul du ratio réel pour le logging
+        actual_ratio = tp_distance / sl_distance
+        tp_points = tp_pips * 10  # Conversion en points
+        
+        # 🔥 LOG DÉTAILLÉ DE LA NOUVELLE STRATÉGIE
         safe_log(f"⚡ TRADE M5 {trade_type} - {signal['reason']}")
         safe_log(f"   📊 ATR actuel: {atr_value:.3f} (volatilité du marché)")
-        safe_log(f"   🎯 Force tendance: {trend_strength:.1f}% → TP market-aware 1:{adaptive_tp_ratio:.2f}")
+        safe_log(f"   🎯 Tendance: {trend_strength:.1f}% → TP plafonné à 180pts")
         safe_log(f"   💰 Prix entrée: ${entry_price:.2f}")
-        safe_log(f"   🛡️ SL réaliste: ${sl_price:.2f} ({sl_pips:.1f} pips = 1.5x ATR)")
-        safe_log(f"   🚀 TP réaliste: ${tp_price:.2f} ({tp_pips:.1f} pips = {adaptive_tp_ratio:.2f}x SL)")
-        safe_log(f"   ⚖️ Ratio R/R: 1:{adaptive_tp_ratio:.2f} (MARKET-AWARE - Tendance + Volatilité)")
+        safe_log(f"   🛡️ SL GRAND: ${sl_price:.2f} ({sl_pips:.1f} pips = 2.5x ATR)")
+        safe_log(f"   🚀 TP PLAFONNÉ: ${tp_price:.2f} ({tp_points:.0f} pts ≤ 180pts max)")
+        safe_log(f"   ⚖️ Ratio R/R: 1:{actual_ratio:.2f} (TP PLAFONNÉ + SL GRANDS)")
         safe_log(f"   📈 Force signal: {signal['strength']:.1f}%")
         safe_log(f"   🎯 Qualité pullback: {signal['pullback_quality']:.1f}%")
         safe_log(f"   📊 RSI: {signal['rsi']:.1f}")
