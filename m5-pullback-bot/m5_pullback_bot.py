@@ -91,11 +91,11 @@ SYMBOL = "XAUUSD"               # Or (excellent pour stratégie pullback)
 TIMEFRAME = mt5.TIMEFRAME_M5    # 🕒 5 minutes (qualité > quantité)
 LOT_SIZE = "ADAPTIVE"           # 🚀 LOT ADAPTATIF AGRESSIF (3.5% risque par trade)
 USE_STOP_LOSS = True            # ✅ STOP LOSS OBLIGATOIRE EN ARGENT RÉEL
-MAX_POSITIONS = 50              # 🔒 OBSOLÈTE - Remplacé par calcul adaptatif selon balance
+MAX_POSITIONS = 3               # 🔒 Max 3 positions simultanées (optimisé pour éviter "No money")
 ANALYSIS_INTERVAL = 60          # 🕒 Analyse toutes les 60 secondes (M5 = moins de bruit)
 
-# 🚀 GESTION LOT ADAPTATIF AGRESSIF
-ADAPTIVE_LOT_RISK_PERCENT = 3.5 # Risque 3.5% par trade (agressif mais sécurisé par -5% balance)
+# 🚀 GESTION LOT ADAPTATIF OPTIMISÉ
+ADAPTIVE_LOT_RISK_PERCENT = 2.5 # Risque 2.5% par trade (optimisé vs 3.5% trop agressif)
 ADAPTIVE_LOT_MIN = 0.01         # Lot minimum (contrainte broker)
 ADAPTIVE_LOT_MAX = 1.0          # Lot maximum (sécurité anti-explosion)
 
@@ -817,6 +817,116 @@ class M5PullbackBot:
     
     # Fonction de fermeture automatique désactivée pour préserver les profits
     
+    def intelligent_position_management(self):
+        """
+        🧠 GESTION INTELLIGENTE DES POSITIONS
+        ===================================
+        
+        Logique avancée:
+        1. Si position en profit ET tendance s'inverse → Fermeture intelligente
+        2. Si position dans le sens de la tendance → Laisser courir
+        3. Vérification margin libre avant nouveaux trades
+        """
+        if not self.open_positions:
+            return
+        
+        # Récupération des positions MT5 actuelles
+        mt5_positions = mt5.positions_get(symbol=self.symbol)
+        if not mt5_positions:
+            return
+        
+        # Analyse de la tendance actuelle
+        try:
+            rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, 250)
+            if rates is None or len(rates) < 50:
+                return
+            
+            data = [{'open': rate['open'], 'high': rate['high'], 
+                    'low': rate['low'], 'close': rate['close']} for rate in rates]
+            
+            trend_direction, strength, signal = self.detect_ultra_trend(data)
+            current_price = signal['price']
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur analyse tendance pour gestion intelligente: {e}")
+            return
+        
+        # Analyse de chaque position
+        for mt5_pos in mt5_positions:
+            try:
+                profit = mt5_pos.profit
+                position_type = "BUY" if mt5_pos.type == 0 else "SELL"
+                ticket = mt5_pos.ticket
+                
+                # ✅ Condition 1: Position en profit ET tendance inversée
+                if profit > 5:  # Au moins 5€ de profit
+                    should_close = False
+                    close_reason = ""
+                    
+                    if position_type == "BUY" and trend_direction == "BEARISH":
+                        should_close = True
+                        close_reason = "BUY profitable + tendance BEARISH"
+                    elif position_type == "SELL" and trend_direction == "BULLISH":
+                        should_close = True
+                        close_reason = "SELL profitable + tendance BULLISH"
+                    
+                    if should_close:
+                        safe_log(f"🧠 GESTION INTELLIGENTE: {close_reason}")
+                        safe_log(f"   💰 Profit actuel: +{profit:.2f}€")
+                        safe_log(f"   🔄 Fermeture anticipée pour sécuriser gain")
+                        
+                        success = self.close_position_by_ticket(ticket)
+                        if success:
+                            self.update_daily_profit(profit)
+                            safe_log(f"✅ Position fermée intelligemment: +{profit:.2f}€")
+                        else:
+                            safe_log(f"❌ Échec fermeture intelligente position {ticket}")
+                
+                # ✅ Condition 2: Position dans le bon sens → Laisser courir
+                elif ((position_type == "BUY" and trend_direction == "BULLISH") or
+                      (position_type == "SELL" and trend_direction == "BEARISH")):
+                    # Position alignée avec la tendance - on laisse courir
+                    if profit > 0:
+                        safe_log(f"🎯 Position {position_type} alignée avec tendance {trend_direction} (+{profit:.2f}€) - Laisser courir")
+                
+            except Exception as e:
+                safe_log(f"❌ Erreur analyse position {mt5_pos.ticket}: {e}")
+    
+    def check_margin_availability(self):
+        """
+        💰 VÉRIFICATION MARGIN LIBRE
+        ============================
+        
+        Vérifie si assez de margin libre pour nouveaux trades
+        Évite les erreurs "No money"
+        """
+        try:
+            account_info = mt5.account_info()
+            if not account_info:
+                return False
+            
+            margin_free = account_info.margin_free
+            balance = account_info.balance
+            margin_level = account_info.margin_level if account_info.margin != 0 else 0
+            
+            # Seuils de sécurité
+            min_margin_free = balance * 0.3  # 30% de la balance en margin libre
+            min_margin_level = 200  # Niveau de margin minimum 200%
+            
+            margin_ok = margin_free >= min_margin_free and margin_level >= min_margin_level
+            
+            if not margin_ok:
+                safe_log(f"⚠️ MARGIN INSUFFISANTE:")
+                safe_log(f"   💰 Margin libre: {margin_free:.2f}€ (min: {min_margin_free:.2f}€)")
+                safe_log(f"   📊 Niveau margin: {margin_level:.1f}% (min: 200%)")
+                safe_log(f"   🚫 Nouveaux trades suspendus")
+            
+            return margin_ok
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur vérification margin: {e}")
+            return False
+
     def sync_positions_with_mt5(self):
         """Synchronise notre liste avec les positions réelles de MT5"""
         if not self.open_positions:
@@ -1966,8 +2076,8 @@ class M5PullbackBot:
             
             # Log informatif
             profit_potential = max_loss_per_trade * 2  # Ratio 1:2
-            safe_log(f"🚀 LOT ADAPTATIF: Balance ${current_balance:.0f} → Lot {lot_size:.2f}")
-            safe_log(f"   💰 Risque: -${max_loss_per_trade:.0f} | Profit potentiel: +${profit_potential:.0f}")
+            safe_log(f"🚀 LOT ADAPTATIF OPTIMISÉ: Balance ${current_balance:.0f} → Lot {lot_size:.2f}")
+            safe_log(f"   💰 Risque: -${max_loss_per_trade:.0f} (2.5%) | Profit potentiel: +${profit_potential:.0f}")
             
             return lot_size
             
@@ -2203,7 +2313,18 @@ class M5PullbackBot:
         safe_log(f"   📊 RSI: {signal['rsi']:.1f}")
         safe_log(f"   🎲 Confiance: {signal['confidence']:.2f}")
         
-        # 🕐 MISE À JOUR TIMESTAMP selon le type de trade
+        # � VÉRIFICATION MARGIN AVANT TRADE
+        if not self.check_margin_availability():
+            safe_log(f"🚫 Trade annulé - Margin insuffisante")
+            return False
+        
+        # 🔒 VÉRIFICATION LIMITE POSITIONS SIMULTANÉES
+        current_positions = len(self.open_positions)
+        if current_positions >= MAX_POSITIONS:
+            safe_log(f"🚫 Trade annulé - Limite positions atteinte ({current_positions}/{MAX_POSITIONS})")
+            return False
+        
+        # �🕐 MISE À JOUR TIMESTAMP selon le type de trade
         if trade_type == 'BUY':
             self.last_buy_timestamp = datetime.now()
         else:  # SELL
@@ -2442,6 +2563,9 @@ class M5PullbackBot:
             while self.is_trading:
                 cycle_count += 1
                 
+                # 🧠 GESTION INTELLIGENTE DES POSITIONS - Toutes les secondes (nouvelle priorité)
+                self.intelligent_position_management()
+                
                 # 🔒 ANALYSE BREAKEVEN - Toutes les secondes (priorité max)
                 self.sync_positions_with_mt5()
                 self.check_and_move_sl_to_breakeven()
@@ -2458,7 +2582,7 @@ class M5PullbackBot:
                 else:
                     last_market_analysis += 1
                 
-                time.sleep(1)  # Analyse breakeven toutes les secondes
+                time.sleep(1)  # Analyse intelligente + breakeven toutes les secondes
                 
         except KeyboardInterrupt:
             elapsed = datetime.now() - self.stats['start_time']
