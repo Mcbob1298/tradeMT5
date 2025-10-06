@@ -905,7 +905,7 @@ class M5PullbackBot:
             # Type d'ordre
             order_type = mt5.ORDER_TYPE_SELL if trade_type == "SELL" else mt5.ORDER_TYPE_BUY
             
-            # Volume (lot size adaptatif basé sur la balance RÉELLE, l'ATR et la FORCE de tendance)
+            # Volume (lot size adaptatif basé sur l'EQUITY RÉELLE, l'ATR et la FORCE de tendance)
             # Calcul de la distance SL basée sur l'ATR pour le lot adaptatif
             atr_sl_distance = signal.get('atr', 2.5) * ATR_SL_MULTIPLIER  # Fallback ATR 2.5 pour XAUUSD
             trend_strength = signal.get('strength', 50)  # Force de la tendance
@@ -1132,20 +1132,21 @@ class M5PullbackBot:
                 return False
             
             margin_free = account_info.margin_free
-            balance = account_info.balance
+            current_equity = account_info.equity  # Utilise equity au lieu de balance
             margin_level = account_info.margin_level if account_info.margin != 0 else 1000  # Si pas de positions ouvertes = OK
             
-            # Seuils de sécurité corrigés
-            min_margin_free = balance * 0.2  # 20% de la balance en margin libre (au lieu de 30%)
+            # Seuils de sécurité basés sur l'equity
+            min_margin_free = current_equity * 0.2  # 20% de l'equity en margin libre (au lieu de 30%)
             min_margin_level = 150  # Niveau de margin minimum 150% (au lieu de 200%)
             
-            # Si aucune position ouverte, on vérifie juste la balance libre
+            # Si aucune position ouverte, on vérifie juste la margin libre
             if margin_level >= 1000:  # Aucune position = niveau très élevé
                 margin_ok = margin_free >= min_margin_free
                 if not margin_ok:
-                    safe_log(f"⚠️ BALANCE INSUFFISANTE:")
-                    safe_log(f"   💰 Balance libre: {margin_free:.2f}€ (min: {min_margin_free:.2f}€)")
-                    safe_log(f"   🚫 Nouveaux trades suspendus")
+                    safe_log(f"⚠️ EQUITY INSUFFISANTE:")
+                    safe_log(f"   💰 Margin libre: {margin_free:.2f}€ (min: {min_margin_free:.2f}€)")
+                    safe_log(f"   � Basé sur equity: {current_equity:.2f}€")
+                    safe_log(f"   �🚫 Nouveaux trades suspendus")
             else:
                 # Avec positions ouvertes, vérification complète
                 margin_ok = margin_free >= min_margin_free and margin_level >= min_margin_level
@@ -1153,6 +1154,7 @@ class M5PullbackBot:
                     safe_log(f"⚠️ MARGIN INSUFFISANTE:")
                     safe_log(f"   💰 Margin libre: {margin_free:.2f}€ (min: {min_margin_free:.2f}€)")
                     safe_log(f"   📊 Niveau margin: {margin_level:.1f}% (min: 150%)")
+                    safe_log(f"   💎 Basé sur equity: {current_equity:.2f}€")
                     safe_log(f"   🚫 Nouveaux trades suspendus")
             
             return margin_ok
@@ -2998,7 +3000,7 @@ class M5PullbackBot:
             float: Taille de lot optimale (adaptée à la certitude)
         """
         try:
-            # Récupération de la balance actuelle
+            # Récupération de l'equity actuelle (capital réel incluant les positions ouvertes)
             account_info = mt5.account_info()
             if not account_info:
                 safe_log("⚠️ Impossible de récupérer l'equity - Lot par défaut: 0.01")
@@ -3192,7 +3194,7 @@ class M5PullbackBot:
         else:
             time_since_last_sell = (current_time - self.last_sell_timestamp).total_seconds()
         
-        # Vérification limites globales - LIMITE ADAPTATIVE SELON BALANCE
+        # Vérification limites globales - LIMITE ADAPTATIVE SELON EQUITY
         current_positions = len(self.open_positions)
         max_positions_adaptatif = self.calculate_adaptive_max_positions()
         if current_positions >= max_positions_adaptatif:
@@ -3962,7 +3964,7 @@ class M5PullbackBot:
         safe_log(f"\n💡 RECOMMANDATIONS D'OPTIMISATION:")
         safe_log(f"\n   🔧 PARAMÈTRES TECHNIQUES:")
         safe_log(f"      • TP actuel: Adaptatif selon ATR - Optimise automatiquement selon volatilité")
-        safe_log(f"      • Lot adaptatif: Optimiser selon balance")
+        safe_log(f"      • Lot adaptatif: Optimiser selon equity")
         safe_log(f"      • Fréquence: Analyser pics d'activité")
         
         safe_log(f"\n   📊 GESTION RISQUE:")

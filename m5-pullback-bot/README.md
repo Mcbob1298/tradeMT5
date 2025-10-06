@@ -48,7 +48,7 @@ python start_m5_pullback.py
 ### 3. Paramètres Principaux
 - **Symbole** : XAUUSD (Or)
 - **Timeframe** : M5 (5 minutes)
-- **Lot Size** : Adaptatif selon la balance
+- **Lot Size** : Adaptatif selon l'equity
 - **Heures de Trading** : 00h20 - 22h50
 
 ## 📋 Structure des Fichiers
@@ -75,8 +75,8 @@ start_m5_pullback.py    # 🚀 Script de lancement
 
 ## 📈 Optimisations
 
-- **Lot Size Adaptatif** : Augmente avec la balance (1 lot par tranche de 1000€)
-- **Positions Limitées** : Maximum calculé selon le risque acceptable (5% de la balance)
+- **Lot Size Adaptatif** : Augmente avec l'equity (calcul basé sur le capital réel disponible)
+- **Positions Limitées** : Maximum calculé selon le risque acceptable (basé sur l'equity)
 - **TP/SL Dynamiques** : S'adaptent automatiquement à la volatilité du marché
 
 ---
