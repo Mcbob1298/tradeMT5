@@ -76,12 +76,12 @@ print("=" * 60)
 # CONFIGURATION ULTRA SCALPING - ARGENT RÉEL
 # =============================================================================
 ENABLE_REAL_TRADING = True   # ✅ TRADING RÉEL ACTIVÉ - ARGENT RÉEL
-MT5_LOGIN = 18491073       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
-MT5_PASSWORD = "mr^WV%U8"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
-MT5_SERVER = "VantageInternational-Live 4"  # ⚠️ TODO: Vérifier le serveur RÉEL
-# MT5_LOGIN = 10007787600       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
-# MT5_PASSWORD = "G@Vv0mNf"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
-# MT5_SERVER = "MetaQuotes-Demo"  # ⚠️ TODO: Vérifier le serveur RÉEL
+# MT5_LOGIN = 18491073       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
+# MT5_PASSWORD = "mr^WV%U8"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
+# MT5_SERVER = "VantageInternational-Live 4"  # ⚠️ TODO: Vérifier le serveur RÉEL
+MT5_LOGIN = 10007787600       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
+MT5_PASSWORD = "G@Vv0mNf"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
+MT5_SERVER = "MetaQuotes-Demo"  # ⚠️ TODO: Vérifier le serveur RÉEL
 # 🚫 MODE SIMULATION DÉSACTIVÉ - TRADING RÉEL
 SIMULATE_BALANCE = 500.0     # ❌ Non utilisé en mode réel
 USE_SIMULATION_MODE = False  # ❌ MODE SIMULATION DÉSACTIVÉ
@@ -1793,6 +1793,249 @@ class M5PullbackBot:
             safe_log(f"✅ VOLATILITÉ OPTIMALE: ATR {current_atr:.2f} dans la plage [{OPTIMAL_ATR_MIN}-{OPTIMAL_ATR_MAX}]")
             return True
 
+    def find_structural_levels(self, symbol, lookback_candles=10):
+        """🏗️ STOP LOSS STRUCTUREL: Trouve les niveaux techniques d'invalidation"""
+        try:
+            # Récupérer les données des dernières bougies pour analyse structurelle
+            rates = mt5.copy_rates_from_pos(symbol, TIMEFRAME, 0, lookback_candles + 5)
+            if rates is None or len(rates) < lookback_candles:
+                safe_log(f"⚠️ Données insuffisantes pour analyse structurelle ({len(rates) if rates else 0} bougies)")
+                return None
+            
+            # Extraire les données OHLC
+            highs = [rate['high'] for rate in rates]
+            lows = [rate['low'] for rate in rates]
+            closes = [rate['close'] for rate in rates]
+            
+            # Trouver le plus bas récent (swing low) sur la période
+            recent_swing_low = min(lows[-lookback_candles:])
+            recent_swing_high = max(highs[-lookback_candles:])
+            
+            # Index du plus bas pour analyse
+            swing_low_index = None
+            for i in range(len(lows) - lookback_candles, len(lows)):
+                if lows[i] == recent_swing_low:
+                    swing_low_index = i
+                    break
+            
+            # Calcul ATR pour marge de sécurité
+            atr_values = []
+            for i in range(1, min(14, len(rates))):
+                high_low = rates[i]['high'] - rates[i]['low']
+                high_close_prev = abs(rates[i]['high'] - rates[i-1]['close'])
+                low_close_prev = abs(rates[i]['low'] - rates[i-1]['close'])
+                true_range = max(high_low, high_close_prev, low_close_prev)
+                atr_values.append(true_range)
+            
+            current_atr = sum(atr_values) / len(atr_values) if atr_values else 0.01
+            
+            safe_log(f"🏗️ ANALYSE STRUCTURELLE:")
+            safe_log(f"   📊 Période analysée: {lookback_candles} bougies")
+            safe_log(f"   📉 Swing Low: {recent_swing_low:.2f}")
+            safe_log(f"   📈 Swing High: {recent_swing_high:.2f}")
+            safe_log(f"   ⚡ ATR calculé: {current_atr:.3f}")
+            
+            return {
+                'swing_low': recent_swing_low,
+                'swing_high': recent_swing_high,
+                'swing_low_index': swing_low_index,
+                'atr': current_atr,
+                'analysis_period': lookback_candles
+            }
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur analyse structurelle: {e}")
+            return None
+
+    def calculate_structural_stop_loss(self, trade_type, entry_price, structural_data):
+        """🎯 CALCUL SL STRUCTUREL: SL basé sur l'invalidation technique du scénario"""
+        if not structural_data:
+            # Fallback sur SL classique ATR si analyse structurelle impossible
+            fallback_sl = entry_price - (structural_data['atr'] if structural_data else 0.01) * 2.5
+            safe_log(f"⚠️ SL Structurel impossible → Fallback ATR: {fallback_sl:.2f}")
+            return fallback_sl
+        
+        current_atr = structural_data['atr']
+        safety_margin = current_atr * 0.5  # Marge de sécurité: 0.5x ATR
+        
+        if trade_type == 'BUY':
+            # Pour BUY: SL sous le dernier swing low
+            structural_sl = structural_data['swing_low'] - safety_margin
+            
+            # Sécurité: SL ne doit pas être trop proche (minimum 1x ATR)
+            min_distance = current_atr * 1.0
+            min_allowed_sl = entry_price - min_distance
+            
+            # Sécurité: SL ne doit pas être trop loin (maximum 5x ATR)
+            max_distance = current_atr * 5.0
+            max_allowed_sl = entry_price - max_distance
+            
+            # Application des limites
+            if structural_sl > min_allowed_sl:
+                structural_sl = min_allowed_sl
+                safe_log(f"🔧 SL ajusté: Trop proche → {structural_sl:.2f}")
+            elif structural_sl < max_allowed_sl:
+                structural_sl = max_allowed_sl
+                safe_log(f"🔧 SL ajusté: Trop loin → {structural_sl:.2f}")
+            
+            safe_log(f"🏗️ SL STRUCTUREL BUY:")
+            safe_log(f"   📉 Swing Low: {structural_data['swing_low']:.2f}")
+            safe_log(f"   🛡️ Marge sécurité: -{safety_margin:.3f}")
+            safe_log(f"   🎯 SL Final: {structural_sl:.2f}")
+            safe_log(f"   📏 Distance: {(entry_price - structural_sl):.2f} points ({((entry_price - structural_sl)/current_atr):.1f}x ATR)")
+            
+        else:  # SELL
+            # Pour SELL: SL au-dessus du dernier swing high
+            structural_sl = structural_data['swing_high'] + safety_margin
+            
+            # Sécurité: SL ne doit pas être trop proche (minimum 1x ATR)
+            min_distance = current_atr * 1.0
+            max_allowed_sl = entry_price + min_distance
+            
+            # Sécurité: SL ne doit pas être trop loin (maximum 5x ATR)
+            max_distance = current_atr * 5.0
+            min_allowed_sl = entry_price + max_distance
+            
+            # Application des limites
+            if structural_sl < max_allowed_sl:
+                structural_sl = max_allowed_sl
+                safe_log(f"🔧 SL ajusté: Trop proche → {structural_sl:.2f}")
+            elif structural_sl > min_allowed_sl:
+                structural_sl = min_allowed_sl
+                safe_log(f"🔧 SL ajusté: Trop loin → {structural_sl:.2f}")
+            
+            safe_log(f"🏗️ SL STRUCTUREL SELL:")
+            safe_log(f"   📈 Swing High: {structural_data['swing_high']:.2f}")
+            safe_log(f"   🛡️ Marge sécurité: +{safety_margin:.3f}")
+            safe_log(f"   🎯 SL Final: {structural_sl:.2f}")
+            safe_log(f"   📏 Distance: {(structural_sl - entry_price):.2f} points ({((structural_sl - entry_price)/current_atr):.1f}x ATR)")
+        
+        return structural_sl
+
+    def log_detailed_market_analysis(self, trend, strength, indicators, rejection_reason=""):
+        """📊 DIAGNOSTIC ULTRA-DÉTAILLÉ: Affiche toutes les informations d'analyse pour comprendre les décisions"""
+        safe_log(f"\n" + "="*80)
+        safe_log(f"🔬 DIAGNOSTIC COMPLET - Raison: {rejection_reason}")
+        safe_log(f"="*80)
+        
+        # === DONNÉES BRUTES ===
+        current_price = indicators['price']
+        ema_master = indicators['ema_master']  # EMA200
+        ema_pullback = indicators['ema_pullback']  # EMA50
+        current_rsi = indicators['rsi']
+        current_atr = indicators['atr']
+        pullback_quality = indicators['pullback_quality']
+        
+        safe_log(f"📊 DONNÉES MARCHÉ:")
+        safe_log(f"   💲 Prix actuel: {current_price:.2f}")
+        safe_log(f"   📈 EMA200 (tendance fond): {ema_master:.2f}")
+        safe_log(f"   📈 EMA50 (pullback): {ema_pullback:.2f}")
+        safe_log(f"   📊 RSI: {current_rsi:.1f}")
+        safe_log(f"   ⚡ ATR (volatilité): {current_atr:.3f}")
+        
+        # === ANALYSE TENDANCE ===
+        safe_log(f"\n🎯 ANALYSE TENDANCE:")
+        safe_log(f"   📈 Tendance détectée: {trend}")
+        safe_log(f"   💪 Force: {strength:.1f}% (seuil: ≥80%)")
+        
+        # Détail composants de la tendance
+        price_vs_ema200 = "HAUSSIER" if current_price > ema_master else "BAISSIER"
+        ema_alignment = "HAUSSIER" if ema_pullback > ema_master else "BAISSIER"
+        price_vs_ema50 = "HAUSSIER" if current_price > ema_pullback else "BAISSIER"
+        
+        safe_log(f"   🔍 Prix vs EMA200: {price_vs_ema200} ({current_price:.2f} vs {ema_master:.2f})")
+        safe_log(f"   🔍 EMA50 vs EMA200: {ema_alignment} ({ema_pullback:.2f} vs {ema_master:.2f})")
+        safe_log(f"   🔍 Prix vs EMA50: {price_vs_ema50} ({current_price:.2f} vs {ema_pullback:.2f})")
+        
+        # === ANALYSE PULLBACK ===
+        safe_log(f"\n🎯 ANALYSE PULLBACK:")
+        safe_log(f"   📊 Qualité pullback: {pullback_quality:.0f}% (seuil: ≥70%)")
+        
+        distance_to_ema50 = abs(current_price - ema_pullback)
+        pullback_threshold = current_atr * 3.0  # ATR_PULLBACK_MULTIPLIER
+        safe_log(f"   📏 Distance à EMA50: {distance_to_ema50:.2f} points")
+        safe_log(f"   📏 Seuil pullback: {pullback_threshold:.2f} points (3×ATR)")
+        safe_log(f"   📊 Ratio distance/seuil: {(distance_to_ema50/pullback_threshold)*100:.1f}%")
+        
+        # === ANALYSE RSI ===
+        safe_log(f"\n🎯 ANALYSE RSI:")
+        safe_log(f"   📊 RSI actuel: {current_rsi:.1f}")
+        safe_log(f"   📊 Zone survente: < {self.config['RSI_OVERSOLD']}")
+        safe_log(f"   📊 Zone surachat: > {self.config['RSI_OVERBOUGHT']}")
+        
+        if current_rsi < self.config['RSI_OVERSOLD']:
+            rsi_zone = "SURVENTE (bearish)"
+        elif current_rsi > self.config['RSI_OVERBOUGHT']:
+            rsi_zone = "SURACHAT (bullish)"
+        else:
+            rsi_zone = "NEUTRE"
+        safe_log(f"   🎯 Zone RSI: {rsi_zone}")
+        
+        # === FILTRES PROFESSIONNELS ===
+        safe_log(f"\n🛡️ FILTRES PROFESSIONNELS:")
+        
+        # Confirmation H1
+        if hasattr(self, 'get_h1_trend_confirmation'):
+            try:
+                h1_trend = self.get_h1_trend_confirmation()
+                safe_log(f"   📈 Tendance H1: {h1_trend}")
+                if trend == "BULLISH" and h1_trend != "BULLISH":
+                    safe_log(f"   ❌ CONFLIT: M5 BULLISH vs H1 {h1_trend}")
+                elif trend == "BEARISH" and h1_trend != "BEARISH":
+                    safe_log(f"   ❌ CONFLIT: M5 BEARISH vs H1 {h1_trend}")
+                else:
+                    safe_log(f"   ✅ COHÉRENCE: M5 {trend} = H1 {h1_trend}")
+            except:
+                safe_log(f"   ⚠️ H1: Données indisponibles")
+        
+        # Volatilité
+        safe_log(f"   ⚡ ATR: {current_atr:.3f} (plage optimale: {OPTIMAL_ATR_MIN}-{OPTIMAL_ATR_MAX})")
+        if current_atr < OPTIMAL_ATR_MIN:
+            safe_log(f"   ❌ VOLATILITÉ: Trop faible (marché endormi)")
+        elif current_atr > OPTIMAL_ATR_MAX:
+            safe_log(f"   ❌ VOLATILITÉ: Trop élevée (marché chaotique)")
+        else:
+            safe_log(f"   ✅ VOLATILITÉ: Dans la plage optimale")
+        
+        # === ÉVALUATION GLOBALE ===
+        safe_log(f"\n🎯 ÉVALUATION GLOBALE:")
+        
+        # Conditions pour BUY
+        if trend == "BULLISH":
+            safe_log(f"   📈 ANALYSE BUY:")
+            buy_conditions = []
+            buy_conditions.append(f"✅ Tendance BULLISH" if strength >= 80 else f"❌ Force {strength:.1f}% < 80%")
+            buy_conditions.append(f"✅ Prix > EMA200" if current_price > ema_master else f"❌ Prix {current_price:.2f} <= EMA200 {ema_master:.2f}")
+            buy_conditions.append(f"✅ Pullback OK" if pullback_quality >= 70 else f"❌ Pullback {pullback_quality:.0f}% < 70%")
+            buy_conditions.append(f"✅ RSI OK" if current_rsi <= self.config['RSI_OVERBOUGHT'] else f"❌ RSI {current_rsi:.1f} > {self.config['RSI_OVERBOUGHT']}")
+            buy_conditions.append(f"✅ ATR OK" if OPTIMAL_ATR_MIN <= current_atr <= OPTIMAL_ATR_MAX else f"❌ ATR {current_atr:.3f} hors plage")
+            
+            for condition in buy_conditions:
+                safe_log(f"      {condition}")
+        
+        # Conditions pour SELL  
+        elif trend == "BEARISH":
+            safe_log(f"   📉 ANALYSE SELL:")
+            sell_conditions = []
+            sell_conditions.append(f"✅ Tendance BEARISH" if strength >= 80 else f"❌ Force {strength:.1f}% < 80%")
+            sell_conditions.append(f"✅ Pullback OK" if pullback_quality >= 70 else f"❌ Pullback {pullback_quality:.0f}% < 70%")
+            sell_conditions.append(f"✅ RSI OK" if self.config['RSI_OVERSOLD'] <= current_rsi <= 65 else f"❌ RSI {current_rsi:.1f} hors zone [30-65]")
+            sell_conditions.append(f"✅ ATR OK" if OPTIMAL_ATR_MIN <= current_atr <= OPTIMAL_ATR_MAX else f"❌ ATR {current_atr:.3f} hors plage")
+            
+            for condition in sell_conditions:
+                safe_log(f"      {condition}")
+        
+        else:
+            safe_log(f"   ❌ TENDANCE: {trend} - Force insuffisante ou direction incertaine")
+        
+        # === CONCLUSION ===
+        safe_log(f"\n🎯 CONCLUSION:")
+        if rejection_reason:
+            safe_log(f"   ❌ SIGNAL REJETÉ: {rejection_reason}")
+        safe_log(f"   📊 Pour trader, il faut TOUTES les conditions ✅")
+        
+        safe_log(f"="*80 + "\n")
+
     def get_adaptive_trade_frequency(self, trend=None):
         """🎯 Retourne la fréquence adaptative selon la direction du marché détectée par detect_ultra_trend()"""
         # Si trend n'est pas fourni, on utilise la détection ultra trend pour cohérence
@@ -2813,9 +3056,13 @@ class M5PullbackBot:
         if strength < 80:  # ⚡ NOUVEAU SEUIL : 80% minimum (au lieu de 70%)
             if strength >= 30:  # Log informatif pour les signaux rejetés
                 safe_log(f"❌ SIGNAL REJETÉ: Force {strength:.1f}% < 80% requis - Pas assez fiable")
+                # 🔍 DIAGNOSTIC COMPLET pour signals faibles
+                self.log_detailed_market_analysis(trend, strength, indicators, "FORCE_INSUFFISANTE")
             return None
         
         if pullback_quality < 70:  # Qualité pullback minimale (70%)
+            safe_log(f"❌ SIGNAL REJETÉ: Pullback {pullback_quality:.0f}% < 70% requis")
+            self.log_detailed_market_analysis(trend, strength, indicators, "PULLBACK_INSUFFISANT")
             return None
         
         # 🛡️ FILTRES DE CONFIRMATION PROFESSIONNELS (NOUVEAU)
@@ -2825,6 +3072,7 @@ class M5PullbackBot:
             h1_trend = self.get_h1_trend_confirmation()
             if h1_trend == "NEUTRAL":
                 safe_log("❌ SIGNAL REJETÉ: Confirmation H1 impossible - Pas de trading en cas de doute")
+                self.log_detailed_market_analysis(trend, strength, indicators, "H1_CONFIRMATION_IMPOSSIBLE")
                 return None
         else:
             h1_trend = trend  # Si désactivé, on accepte la tendance M5
@@ -2832,6 +3080,7 @@ class M5PullbackBot:
         # FILTRE 2: Régime de volatilité optimal
         if not self.check_volatility_regime(current_atr):
             safe_log("❌ SIGNAL REJETÉ: Conditions de volatilité non optimales")
+            self.log_detailed_market_analysis(trend, strength, indicators, "VOLATILITÉ_NON_OPTIMALE")
             return None
         
         # Calcul des cooldowns adaptatifs
@@ -2866,6 +3115,8 @@ class M5PullbackBot:
             if time_since_last_buy < cooldown:
                 remaining_time = cooldown - time_since_last_buy
                 safe_log(f"⏳ BUY Cooldown PULLBACK: {remaining_time:.0f}s restantes (signal valide mais en attente)")
+                safe_log(f"✅ SIGNAL BUY VALIDE - En attente de cooldown")
+                self.log_detailed_market_analysis(trend, strength, indicators, "SIGNAL_VALIDE_COOLDOWN")
                 return None
             
             # 🎯 Signal BUY validé !
@@ -2874,6 +3125,9 @@ class M5PullbackBot:
             safe_log(f"   📊 RSI: {current_rsi:.1f} (<= {self.config['RSI_OVERBOUGHT']})")
             safe_log(f"   🎯 Pullback: {pullback_quality:.0f}%")
             safe_log(f"   ⏰ Cooldown: OK ({time_since_last_buy:.0f}s >= {cooldown}s)")
+            
+            # Log succès détaillé
+            self.log_detailed_market_analysis(trend, strength, indicators, "SIGNAL_BUY_VALIDÉ")
             
             return {
                 'type': 'BUY', 
@@ -2899,6 +3153,8 @@ class M5PullbackBot:
             if time_since_last_sell < sell_cooldown:
                 remaining_time = sell_cooldown - time_since_last_sell
                 safe_log(f"⏳ SELL Cooldown PULLBACK: {remaining_time:.0f}s restantes")
+                safe_log(f"✅ SIGNAL SELL VALIDE - En attente de cooldown")
+                self.log_detailed_market_analysis(trend, strength, indicators, "SIGNAL_VALIDE_COOLDOWN")
                 return None
             
             # 🎯 Signal SELL validé !
@@ -2907,6 +3163,9 @@ class M5PullbackBot:
             safe_log(f"   📊 RSI: {current_rsi:.1f} (30-65 optimal pour SELL)")
             safe_log(f"   🎯 Pullback: {pullback_quality:.0f}%")
             safe_log(f"   ⏰ Cooldown: OK ({time_since_last_sell:.0f}s >= {sell_cooldown}s)")
+            
+            # Log succès détaillé
+            self.log_detailed_market_analysis(trend, strength, indicators, "SIGNAL_SELL_VALIDÉ")
             
             return {
                 'type': 'SELL', 
@@ -2919,40 +3178,42 @@ class M5PullbackBot:
             }
         
         # 🐛 DEBUG: Pourquoi pas de TRADE ? Loggons les conditions non remplies
+        safe_log(f"🔍 ANALYSE COMPLÈTE:")
+        safe_log(f"   📊 Tendance: {trend} {strength:.1f}% (≥80% requis)")
+        safe_log(f"   📊 H1 Trend: {h1_trend if 'h1_trend' in locals() else 'Non vérifié'}")
+        safe_log(f"   📊 Pullback: {pullback_quality:.0f}% (≥70% requis)")
+        safe_log(f"   📊 RSI: {current_rsi:.1f} (zone optimale: 30-70)")
+        safe_log(f"   📊 ATR: {current_atr:.3f} (plage: {OPTIMAL_ATR_MIN}-{OPTIMAL_ATR_MAX})")
+        safe_log(f"   📊 Prix: {current_price:.2f} | EMA200: {ema_master:.2f} | EMA50: {ema_pullback:.2f}")
+        
         if trend == "BULLISH":
-            safe_log(f"🔍 DEBUG BULLISH: Price={current_price:.2f}, EMA200={ema_master:.2f}, Pullback={pullback_quality:.0f}%, RSI={current_rsi:.1f}")
-            safe_log(f"   📊 H1 Trend: {h1_trend}, Volatilité ATR: {current_atr:.2f}")
+            safe_log(f"🔍 CONDITIONS BUY NON REMPLIES:")
             if h1_trend != "BULLISH":
-                safe_log(f"   ❌ BUY bloqué: H1 trend {h1_trend} ≠ BULLISH (pas de confirmation H1)")
-            elif current_price <= ema_master:
-                safe_log(f"   ❌ BUY bloqué: Prix {current_price:.2f} <= EMA200 {ema_master:.2f}")
-            elif pullback_quality < 70:
-                safe_log(f"   ❌ BUY bloqué: Pullback {pullback_quality:.0f}% < 70%")
-            elif current_rsi > self.config['RSI_OVERBOUGHT']:
-                safe_log(f"   ❌ BUY bloqué: RSI {current_rsi:.1f} > {self.config['RSI_OVERBOUGHT']} (surachat)")
-            else:
-                safe_log(f"   ✅ BUY: Toutes conditions remplies! Vérifiez cooldown...")
+                safe_log(f"   ❌ H1 trend {h1_trend} ≠ BULLISH (conflit multi-timeframe)")
+            if current_price <= ema_master:
+                safe_log(f"   ❌ Prix {current_price:.2f} <= EMA200 {ema_master:.2f}")
+            if pullback_quality < 70:
+                safe_log(f"   ❌ Pullback {pullback_quality:.0f}% < 70%")
+            if current_rsi > self.config['RSI_OVERBOUGHT']:
+                safe_log(f"   ❌ RSI {current_rsi:.1f} > {self.config['RSI_OVERBOUGHT']} (surachat)")
         
         elif trend == "BEARISH":
-            safe_log(f"🔍 DEBUG BEARISH: Price={current_price:.2f}, EMA200={ema_master:.2f}, Pullback={pullback_quality:.0f}%, RSI={current_rsi:.1f}")
-            safe_log(f"   📊 H1 Trend: {h1_trend}, Volatilité ATR: {current_atr:.2f}")
+            safe_log(f"🔍 CONDITIONS SELL NON REMPLIES:")
             if h1_trend != "BEARISH":
-                safe_log(f"   ❌ SELL bloqué: H1 trend {h1_trend} ≠ BEARISH (pas de confirmation H1)")
-            elif pullback_quality < 70:
-                safe_log(f"   ❌ SELL bloqué: Pullback {pullback_quality:.0f}% < 70%")
-            elif current_rsi < self.config['RSI_OVERSOLD']:
-                safe_log(f"   ❌ SELL bloqué: RSI {current_rsi:.1f} < {self.config['RSI_OVERSOLD']} (trop bas)")
-            elif current_rsi > 65:
-                safe_log(f"   ❌ SELL bloqué: RSI {current_rsi:.1f} > 65 (trop élevé)")
-            else:
-                safe_log(f"   ✅ SELL: Toutes conditions remplies! Vérifiez cooldown...")
+                safe_log(f"   ❌ H1 trend {h1_trend} ≠ BEARISH (conflit multi-timeframe)")
+            if pullback_quality < 70:
+                safe_log(f"   ❌ Pullback {pullback_quality:.0f}% < 70%")
+            if current_rsi < self.config['RSI_OVERSOLD']:
+                safe_log(f"   ❌ RSI {current_rsi:.1f} < {self.config['RSI_OVERSOLD']} (trop bas)")
+            if current_rsi > 65:
+                safe_log(f"   ❌ RSI {current_rsi:.1f} > 65 (trop élevé)")
         
         else:
-            safe_log(f"🔍 DEBUG SIDEWAYS: Pas de tendance claire → Pas de trading")
-            safe_log(f"   📊 Tendance: {trend} {strength:.1f}% (< 80%)")
+            safe_log(f"🔍 TENDANCE INSUFFISANTE:")
+            safe_log(f"   ❌ Force {strength:.1f}% < 80% ou direction incertaine")
             
-        # 📊 DEBUG GÉNÉRAL: Toujours afficher les seuils avec nouveaux filtres
-        safe_log(f"📋 SEUILS: Pullback≥70%, RSI=[{self.config['RSI_OVERSOLD']}-{self.config['RSI_OVERBOUGHT']}], Force≥80%, H1 confirmé, ATR optimal")
+        # Diagnostic détaillé pour tous les cas de rejet
+        self.log_detailed_market_analysis(trend, strength, indicators, "CONDITIONS_NON_REMPLIES")
         
         # Aucune condition remplie
         return None
@@ -3014,18 +3275,36 @@ class M5PullbackBot:
         else:  # SELL
             entry_price = tick_info.bid
         
-        # 🔥 NOUVELLE STRATÉGIE : SL ADAPTATIFS + TP PLAFONNÉS + LOTS ÉLEVÉS
-        sl_distance = sl_multiplier * atr_value  # SL adaptatif selon validation
+        # 🏗️ ANALYSE STRUCTURELLE POUR SL INTELLIGENT
+        safe_log(f"🔍 ANALYSE STRUCTURELLE pour SL optimal...")
+        structural_data = self.find_structural_levels(self.symbol, lookback_candles=10)
+        
+        if structural_data:
+            # Utilisation du SL structurel (niveau d'invalidation technique)
+            structural_sl = self.calculate_structural_stop_loss(trade_type, entry_price, structural_data)
+            safe_log(f"🏗️ SL STRUCTUREL choisi: {structural_sl:.2f}")
+            sl_price = structural_sl
+            # Recalcul de la distance pour TP et ratios
+            sl_distance = abs(entry_price - sl_price)
+        else:
+            # Fallback sur SL ATR classique
+            safe_log(f"⚠️ Analyse structurelle impossible → Fallback SL ATR")
+            sl_distance = sl_multiplier * atr_value
+            if trade_type == 'BUY':
+                sl_price = entry_price - sl_distance
+            else:  # SELL
+                sl_price = entry_price + sl_distance
+            safe_log(f"📊 SL ATR Fallback: {sl_price:.2f}")
+        
+        # 🔥 NOUVELLE STRATÉGIE : TP ADAPTATIFS basés sur le SL structurel
         
         # 🎯 TP PLAFONNÉ À 200 POINTS MAXIMUM
         tp_distance = self.calculate_market_aware_tp_ratio(trend_strength, atr_value, sl_distance)
         
         # Application selon le type d'ordre
         if trade_type == 'BUY':
-            sl_price = entry_price - sl_distance
             tp_price = entry_price + tp_distance
         else:  # SELL
-            sl_price = entry_price + sl_distance
             tp_price = entry_price - tp_distance
         
         # Conversion en pips pour XAUUSD (1 pip = 0.1)
@@ -3036,14 +3315,18 @@ class M5PullbackBot:
         actual_ratio = tp_distance / sl_distance
         tp_points = tp_pips * 10  # Conversion en points
         
+        # Déterminer le type de SL utilisé
+        sl_type = "STRUCTUREL" if structural_data else "ATR"
+        sl_description = f"{sl_type} ({'ÉLARGI' if sl_multiplier > ATR_SL_MULTIPLIER else 'STANDARD'})"
+        
         # 🔥 LOG DÉTAILLÉ DE LA NOUVELLE STRATÉGIE
         safe_log(f"⚡ TRADE M5 {trade_type} - {signal['reason']}")
         safe_log(f"   📊 ATR actuel: {atr_value:.3f} (volatilité du marché)")
         safe_log(f"   🎯 Tendance: {trend_strength:.1f}% → TP plafonné à 200pts")
         safe_log(f"   💰 Prix entrée: ${entry_price:.2f}")
-        safe_log(f"   🛡️ SL {'ÉLARGI' if sl_multiplier > ATR_SL_MULTIPLIER else 'STANDARD'}: ${sl_price:.2f} ({sl_pips:.1f} pips = {sl_multiplier}x ATR)")
+        safe_log(f"   🏗️ SL {sl_description}: ${sl_price:.2f} ({sl_pips:.1f} pips)")
         safe_log(f"   🚀 TP PLAFONNÉ: ${tp_price:.2f} ({tp_points:.0f} pts ≤ 200pts max)")
-        safe_log(f"   ⚖️ Ratio R/R: 1:{actual_ratio:.2f} (TP PLAFONNÉ + SL {'ÉLARGI' if sl_multiplier > ATR_SL_MULTIPLIER else 'STANDARD'})")
+        safe_log(f"   ⚖️ Ratio R/R: 1:{actual_ratio:.2f} (TP PLAFONNÉ + SL {sl_type})")
         safe_log(f"   📈 Force signal: {signal['strength']:.1f}%{' (YOLO ULTRA-VALIDÉ)' if trend_strength >= 95 else ''}")
         safe_log(f"   🎯 Qualité pullback: {signal['pullback_quality']:.1f}%")
         safe_log(f"   📊 RSI: {signal['rsi']:.1f}")
