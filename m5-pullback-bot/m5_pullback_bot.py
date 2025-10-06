@@ -1378,7 +1378,7 @@ class M5PullbackBot:
                 # 🚀 TRAILING STOP INTELLIGENT - Déclenchement précoce à 30%
                 if tp_progress_pct >= 30.0:
                     
-                    # 📈 CALCUL DU NIVEAU DE SL PROGRESSIF
+                    # 📈 CALCUL DU NIVEAU DE SL PROGRESSIF - TOUJOURS POSITIF
                     if tp_progress_pct >= 90.0:
                         # Quasi TP atteint → 75% du profit sécurisé
                         sl_profit_ratio = 0.75
@@ -1392,13 +1392,37 @@ class M5PullbackBot:
                         sl_profit_ratio = 0.25
                         phase = "PROGRESSION (25% profit)"
                     else:
-                        # Premier niveau (30-50%) → 10% du TP sécurisé (au lieu de 0%)
-                        sl_profit_ratio = 0.10
-                        phase = "SÉCURISÉ (10% profit)"
+                        # Premier niveau (30-50%) → MINIMUM 40 PIPS DE PROFIT GARANTIS
+                        # Au lieu de 10% du TP (qui peut être négatif), on garantit 40 pips minimum
+                        min_profit_pips = 40  # 40 pips minimum de profit garanti
+                        min_profit_distance = min_profit_pips * 0.1  # Conversion en distance prix
+                        
+                        # On prend le MAXIMUM entre 10% du TP et 40 pips garantis
+                        tp_10_percent = tp_distance * 0.10
+                        target_profit_distance = max(tp_10_percent, min_profit_distance)
+                        
+                        # Définir sl_profit_ratio pour le logging (ratio équivalent)
+                        sl_profit_ratio = target_profit_distance / tp_distance if tp_distance > 0 else 0.10
+                        
+                        phase = f"SÉCURISÉ (≥{min_profit_pips} pips profit GARANTI)"
+                        
+                        # Calcul direct du SL avec profit garanti
+                        new_sl_progressive = entry_price + target_profit_distance
                     
-                    # Calcul du nouveau SL selon la phase
-                    target_profit_distance = tp_distance * sl_profit_ratio
-                    new_sl_progressive = entry_price + target_profit_distance
+                    # Pour les autres phases (≥50%), calcul normal
+                    if tp_progress_pct >= 50.0:
+                        # Calcul du nouveau SL selon la phase
+                        target_profit_distance = tp_distance * sl_profit_ratio
+                        new_sl_progressive = entry_price + target_profit_distance
+                    
+                    # 🛡️ SÉCURITÉ ULTIME : Vérifier que le SL est TOUJOURS en profit
+                    min_guaranteed_profit = 30 * 0.1  # 30 pips minimum absolu
+                    absolute_minimum_sl = entry_price + min_guaranteed_profit
+                    
+                    if new_sl_progressive < absolute_minimum_sl:
+                        safe_log(f"   🛡️ SÉCURITÉ: SL ajusté de {new_sl_progressive:.5f} → {absolute_minimum_sl:.5f} (profit 30 pips minimum)")
+                        new_sl_progressive = absolute_minimum_sl
+                        phase += " → SÉCURISÉ 30 pips"
                     
                     # 🛡️ RÈGLE D'OR : Ne JAMAIS reculer le SL
                     current_sl = mt5_position.sl if mt5_position.sl > 0 else entry_price
@@ -1561,7 +1585,7 @@ class M5PullbackBot:
                 # Trailing stop pour SELL (même logique que BUY mais inversée)
                 if tp_progress_pct >= 30.0:
                     
-                    # Calcul des niveaux de SL progressifs (même logique)
+                    # 📈 CALCUL DU NIVEAU DE SL PROGRESSIF - TOUJOURS POSITIF (SELL)
                     if tp_progress_pct >= 90.0:
                         sl_profit_ratio = 0.75
                         phase = "QUASI-TP (75% profit)"
@@ -1572,13 +1596,36 @@ class M5PullbackBot:
                         sl_profit_ratio = 0.25
                         phase = "PROGRESSION (25% profit)"
                     else:
-                        # Premier niveau (30-50%) → 10% du TP sécurisé (au lieu de 0%)
-                        sl_profit_ratio = 0.10
-                        phase = "SÉCURISÉ (10% profit)"
+                        # Premier niveau (30-50%) → MINIMUM 40 PIPS DE PROFIT GARANTIS
+                        min_profit_pips = 40  # 40 pips minimum de profit garanti
+                        min_profit_distance = min_profit_pips * 0.1  # Conversion en distance prix
+                        
+                        # On prend le MAXIMUM entre 10% du TP et 40 pips garantis
+                        tp_10_percent = tp_distance * 0.10
+                        target_profit_distance = max(tp_10_percent, min_profit_distance)
+                        
+                        # Définir sl_profit_ratio pour le logging (ratio équivalent) - SELL
+                        sl_profit_ratio = target_profit_distance / tp_distance if tp_distance > 0 else 0.10
+                        
+                        phase = f"SÉCURISÉ (≥{min_profit_pips} pips profit GARANTI)"
+                        
+                        # Pour SELL : SL = entry_price - target_profit_distance
+                        new_sl_progressive = entry_price - target_profit_distance
                     
-                    # Pour SELL : SL = entry_price - (tp_distance * ratio)
-                    target_profit_distance = tp_distance * sl_profit_ratio
-                    new_sl_progressive = entry_price - target_profit_distance
+                    # Pour les autres phases (≥50%), calcul normal
+                    if tp_progress_pct >= 50.0:
+                        # Pour SELL : SL = entry_price - (tp_distance * ratio)
+                        target_profit_distance = tp_distance * sl_profit_ratio
+                        new_sl_progressive = entry_price - target_profit_distance
+                    
+                    # 🛡️ SÉCURITÉ ULTIME SELL : Vérifier que le SL est TOUJOURS en profit
+                    min_guaranteed_profit = 30 * 0.1  # 30 pips minimum absolu
+                    absolute_maximum_sl = entry_price - min_guaranteed_profit  # Pour SELL, SL plus BAS
+                    
+                    if new_sl_progressive > absolute_maximum_sl:
+                        safe_log(f"   🛡️ SÉCURITÉ SELL: SL ajusté de {new_sl_progressive:.5f} → {absolute_maximum_sl:.5f} (profit 30 pips minimum)")
+                        new_sl_progressive = absolute_maximum_sl
+                        phase += " → SÉCURISÉ 30 pips"
                     
                     # Ne jamais reculer le SL (pour SELL, cela signifie ne jamais l'augmenter)
                     current_sl = mt5_position.sl if mt5_position.sl > 0 else entry_price
@@ -1632,6 +1679,17 @@ class M5PullbackBot:
                         safe_log(f"   ❌ SL SELL invalide: {new_sl_progressive:.5f} <= prix ASK {current_price_ask:.5f}")
                         continue
                     
+                    # 📊 LOGS DÉTAILLÉS SELL (avant modification)
+                    safe_log(f"   📊 Progression TP SELL: {tp_progress_pct:.1f}% (seuil: 30%)")
+                    safe_log(f"   💰 Profit actuel: +{current_profit_distance:.3f} | TP cible: {tp_distance:.3f}")
+                    safe_log(f"   🔄 SL: {current_sl:.5f} → {new_sl_progressive:.5f}")
+                    
+                    # Calcul du profit garanti SELL (inversé par rapport à BUY)
+                    guaranteed_profit_distance = entry_price - new_sl_progressive  # Pour SELL: profit = entrée - SL
+                    guaranteed_profit_pips = guaranteed_profit_distance / symbol_info.point / 10
+                    safe_log(f"   🎯 SL progressif SELL: {new_sl_progressive:.5f}")
+                    safe_log(f"   💰 Profit garanti SELL: +{guaranteed_profit_pips:.1f} pips")
+                    
                     # Modification du SL pour SELL (même requête que BUY)
                     request = {
                         "action": mt5.TRADE_ACTION_SLTP,
@@ -1650,6 +1708,7 @@ class M5PullbackBot:
                             safe_log(f"   📈 Phase: {phase}")
                             safe_log(f"   💰 Progression: {tp_progress_pct:.1f}%")
                             safe_log(f"   🛡️ SL sécurisé: {new_sl_progressive:.5f}")
+                            safe_log(f"   ✅ Profit minimum garanti SELL: +{guaranteed_profit_pips:.1f} pips!")
                         elif result:
                             # Gestion des erreurs SELL avec détails
                             error_details = {
@@ -2032,6 +2091,44 @@ class M5PullbackBot:
         safe_log(f"\n🎯 CONCLUSION:")
         if rejection_reason:
             safe_log(f"   ❌ SIGNAL REJETÉ: {rejection_reason}")
+            
+            # === DIAGNOSTIC SPÉCIAL COOLDOWN ===
+            if rejection_reason == "SIGNAL_VALIDE_COOLDOWN":
+                safe_log(f"\n⏰ DÉTAILS COOLDOWN:")
+                safe_log(f"   🎯 SIGNAL PARFAITEMENT VALIDE!")
+                safe_log(f"   ✅ Toutes les conditions techniques sont remplies")
+                safe_log(f"   ⏳ Attente cooldown pour éviter l'overtrading")
+                safe_log(f"   📋 Stratégie: Espacement minimum 5 minutes entre trades")
+                safe_log(f"   🔄 Le signal sera exécuté dès que le cooldown expire")
+                
+                # Calcul temps restant plus détaillé
+                current_time = datetime.now()
+                cooldown_duration = 300  # 5 minutes en secondes
+                
+                if trend == "BULLISH":
+                    if self.last_buy_timestamp:
+                        time_since_last = (current_time - self.last_buy_timestamp).total_seconds()
+                        remaining = max(0, cooldown_duration - time_since_last)
+                        minutes_remaining = int(remaining // 60)
+                        seconds_remaining = int(remaining % 60)
+                        safe_log(f"   ⏰ Temps restant BUY: {minutes_remaining}m {seconds_remaining}s")
+                        if remaining > 0:
+                            next_trade_time = current_time + timedelta(seconds=remaining)
+                            safe_log(f"   🎯 Prochain trade BUY possible: {next_trade_time.strftime('%H:%M:%S')}")
+                
+                elif trend == "BEARISH":
+                    if self.last_sell_timestamp:
+                        time_since_last = (current_time - self.last_sell_timestamp).total_seconds()
+                        remaining = max(0, cooldown_duration - time_since_last)
+                        minutes_remaining = int(remaining // 60)
+                        seconds_remaining = int(remaining % 60)
+                        safe_log(f"   ⏰ Temps restant SELL: {minutes_remaining}m {seconds_remaining}s")
+                        if remaining > 0:
+                            next_trade_time = current_time + timedelta(seconds=remaining)
+                            safe_log(f"   🎯 Prochain trade SELL possible: {next_trade_time.strftime('%H:%M:%S')}")
+                
+                safe_log(f"   💡 Conseil: Le signal reste valide, patience!")
+        
         safe_log(f"   📊 Pour trader, il faut TOUTES les conditions ✅")
         
         safe_log(f"="*80 + "\n")
@@ -3114,8 +3211,11 @@ class M5PullbackBot:
             
             if time_since_last_buy < cooldown:
                 remaining_time = cooldown - time_since_last_buy
-                safe_log(f"⏳ BUY Cooldown PULLBACK: {remaining_time:.0f}s restantes (signal valide mais en attente)")
-                safe_log(f"✅ SIGNAL BUY VALIDE - En attente de cooldown")
+                minutes_remaining = int(remaining_time // 60)
+                seconds_remaining = int(remaining_time % 60)
+                safe_log(f"⏳ BUY Cooldown PULLBACK: {remaining_time:.0f}s restantes ({minutes_remaining}m {seconds_remaining}s)")
+                safe_log(f"✅ SIGNAL BUY VALIDE - En attente de cooldown (toutes conditions remplies!)")
+                safe_log(f"🕐 Prochain trade BUY possible à: {(datetime.now() + timedelta(seconds=remaining_time)).strftime('%H:%M:%S')}")
                 self.log_detailed_market_analysis(trend, strength, indicators, "SIGNAL_VALIDE_COOLDOWN")
                 return None
             
@@ -3152,8 +3252,11 @@ class M5PullbackBot:
             
             if time_since_last_sell < sell_cooldown:
                 remaining_time = sell_cooldown - time_since_last_sell
-                safe_log(f"⏳ SELL Cooldown PULLBACK: {remaining_time:.0f}s restantes")
-                safe_log(f"✅ SIGNAL SELL VALIDE - En attente de cooldown")
+                minutes_remaining = int(remaining_time // 60)
+                seconds_remaining = int(remaining_time % 60)
+                safe_log(f"⏳ SELL Cooldown PULLBACK: {remaining_time:.0f}s restantes ({minutes_remaining}m {seconds_remaining}s)")
+                safe_log(f"✅ SIGNAL SELL VALIDE - En attente de cooldown (toutes conditions remplies!)")
+                safe_log(f"🕐 Prochain trade SELL possible à: {(datetime.now() + timedelta(seconds=remaining_time)).strftime('%H:%M:%S')}")
                 self.log_detailed_market_analysis(trend, strength, indicators, "SIGNAL_VALIDE_COOLDOWN")
                 return None
             
