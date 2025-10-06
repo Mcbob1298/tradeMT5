@@ -2741,11 +2741,11 @@ class M5PullbackBot:
             }
 
         # 🔴 STRATÉGIE 2: VENTE SUR PULLBACK BAISSIER (SELL)
-        # Conditions: Tendance baissière + Prix proche EMA 50 + RSI faible
+        # Conditions: Tendance baissière + Pullback détecté + RSI favorable
         elif (trend == "BEARISH" and 
-              current_price < ema_master and  # Prix < EMA 200 (tendance de fond baissière)
-              pullback_quality >= 60 and     # Prix proche de l'EMA 50 (rebond détecté)
-              current_rsi >= self.config['RSI_OVERSOLD']):  # RSI > 30 (rebond sur zone de survente)
+              pullback_quality >= 60 and     # Pullback détecté (prix proche EMA50)
+              current_rsi >= self.config['RSI_OVERSOLD'] and  # RSI > 30 (pas en survente extrême)
+              current_rsi <= 65):            # RSI pas trop élevé (évite faux rebonds)
             
             # Cooldown SELL adaptatif
             sell_cooldown = 300  # 5 minutes entre les trades
@@ -2758,7 +2758,7 @@ class M5PullbackBot:
             # 🎯 Signal SELL validé !
             safe_log(f"🔴 SIGNAL SELL VALIDÉ! Toutes conditions remplies:")
             safe_log(f"   📈 Tendance: {trend} {strength:.1f}%")
-            safe_log(f"   📊 RSI: {current_rsi:.1f} (>= {self.config['RSI_OVERSOLD']})")
+            safe_log(f"   📊 RSI: {current_rsi:.1f} (30-65 optimal pour SELL)")
             safe_log(f"   🎯 Pullback: {pullback_quality:.0f}%")
             safe_log(f"   ⏰ Cooldown: OK ({time_since_last_sell:.0f}s >= {sell_cooldown}s)")
             
@@ -2775,12 +2775,14 @@ class M5PullbackBot:
         # 🐛 DEBUG: Pourquoi pas de SELL ? Loggons les conditions non remplies
         if trend == "BEARISH":
             safe_log(f"🔍 DEBUG BEARISH: Price={current_price:.2f}, EMA200={ema_master:.2f}, Pullback={pullback_quality:.0f}%, RSI={current_rsi:.1f}")
-            if current_price >= ema_master:
-                safe_log(f"   ❌ SELL bloqué: Prix {current_price:.2f} >= EMA200 {ema_master:.2f}")
-            elif pullback_quality < 60:
+            if pullback_quality < 60:
                 safe_log(f"   ❌ SELL bloqué: Pullback {pullback_quality:.0f}% < 60%")
             elif current_rsi < self.config['RSI_OVERSOLD']:
-                safe_log(f"   ❌ SELL bloqué: RSI {current_rsi:.1f} < {self.config['RSI_OVERSOLD']}")
+                safe_log(f"   ❌ SELL bloqué: RSI {current_rsi:.1f} < {self.config['RSI_OVERSOLD']} (trop bas)")
+            elif current_rsi > 65:
+                safe_log(f"   ❌ SELL bloqué: RSI {current_rsi:.1f} > 65 (trop élevé)")
+            else:
+                safe_log(f"   ✅ SELL: Toutes conditions remplies! Vérifiez cooldown...")
         
         # Aucune condition remplie
         return None
