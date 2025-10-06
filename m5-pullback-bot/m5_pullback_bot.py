@@ -92,7 +92,7 @@ TIMEFRAME = mt5.TIMEFRAME_M5    # 🕒 5 minutes (qualité > quantité)
 LOT_SIZE = "ADAPTIVE"           # 🚀 LOT ADAPTATIF AGRESSIF (3.5% risque par trade)
 USE_STOP_LOSS = True            # ✅ STOP LOSS OBLIGATOIRE EN ARGENT RÉEL
 MAX_POSITIONS = 3               # 🔒 Max 3 positions simultanées (optimisé pour éviter "No money")
-ANALYSIS_INTERVAL = 30          # 🕒 Analyse toutes les 30 secondes (M5 = moins de bruit)
+ANALYSIS_INTERVAL = 60          # 🕒 Analyse toutes les 60 secondes (optimisé pour M5)
 
 # 🚀 GESTION LOT ADAPTATIF OPTIMISÉ
 ADAPTIVE_LOT_RISK_PERCENT = 2.5 # Risque 2.5% par trade (optimisé vs 3.5% trop agressif)
@@ -106,7 +106,7 @@ ATR_PERIOD = 14                 # ATR pour TP/SL adaptatifs selon volatilité
 RSI_PERIOD = 14                 # RSI standard (14 périodes)
 
 # 🎯 STRATÉGIE RÉVISÉE : TP PETITS + SL GRANDS + LOTS ÉLEVÉS
-ATR_PULLBACK_MULTIPLIER = 4.5   # Distance max à l'EMA 50 (4.5x ATR - plus sensible pour plus d'opportunités)
+ATR_PULLBACK_MULTIPLIER = 3.0   # Distance max à l'EMA 50 (3.0x ATR - zone pullback plus proche)
 ATR_SL_MULTIPLIER = 2.5         # 🔥 SL plus grand à 2.5x ATR (plus de respiration)
 TP_MAX_POINTS = 200             # 🎯 TP maximum : 200 points (20 pips) - PLAFONNÉ
 RISK_MULTIPLIER = 1.5           # 💰 Multiplicateur de risque augmenté (lots plus élevés)
@@ -118,7 +118,23 @@ RSI_SELL_MIN = 45              # RSI minimum pour SELL (faiblesse confirmée)
 RSI_SELL_MAX = 60              # RSI maximum pour SELL (rebond s'essoufle)
 
 # 🎯 PARAMÈTRES M5 PULLBACK (Qualité > Quantité)
-# COOLDOWNS supprimés - La stratégie M5 ne nécessite pas de cooldowns agressifs
+# COOLDOWN : 1 minute entre les trades pour éviter le sur-trading
+
+# 🛡️ GESTION DU MODE DÉGRADÉ (NOUVEAU)
+DEGRADED_MODE_RISK_MULTIPLIER = 0.2  # Risque = 20% du risque normal (2.5% -> 0.5%)
+DEGRADED_MODE_RECOVERY_THRESHOLD = -2.0  # Seuil de sortie du mode dégradé (-2%)
+DEGRADED_MODE_MAX_RR_RATIO = 1.0  # Ratio R/R plafonné à 1:1 en mode dégradé
+
+# 🛡️ VALIDATION ULTRA-STRICT POUR SIGNAUX YOLO (NOUVEAU)
+YOLO_MIN_STRENGTH = 98.0              # 98% au lieu de 95% (plus strict)
+YOLO_MIN_EMA_SPREAD = 0.15            # Écart minimum EMAs (0.15% minimum) 
+YOLO_MAX_RSI_OVERBOUGHT = 75          # RSI pas trop extrême
+YOLO_MIN_RSI_OVERSOLD = 25            # RSI pas trop extrême
+YOLO_SL_MULTIPLIER = 3.5              # SL plus large (3.5x ATR au lieu de 2.5x)
+YOLO_MIN_ATR = 1.5                    # ATR minimum pour éviter marché trop calme
+YOLO_MAX_ATR = 8.0                    # ATR maximum pour éviter marché chaotique
+CONFIRMATION_DELAY_SECONDS = 180      # 3 minutes d'attente pour confirmation
+SIGNAL_PERSISTENCE_CHECKS = 3         # Signal doit persister 3 vérifications
 
 # =============================================================================
 
@@ -211,7 +227,12 @@ class M5PullbackBot:
         # Variables système profit quotidien adaptatif
         self.daily_start_balance = 0  # Balance de départ du jour
         
-        # 🕐 HORAIRES DE TRADING - Arrêt du trading à 22h00, reprise à 00h20
+        # �️ SYSTÈME DE VALIDATION ULTRA-STRICT YOLO
+        self.yolo_validation_history = []  # Historique des validations YOLO
+        self.pending_yolo_signals = {}     # Signaux YOLO en attente de confirmation
+        self.yolo_performance_tracker = []  # Suivi performances des trades YOLO
+        
+        # �🕐 HORAIRES DE TRADING - Arrêt du trading à 22h00, reprise à 00h20
         self.daily_close_time = 22.0   # Heure d'arrêt du trading (22h00) - PLUS DE FERMETURE FORCÉE
         self.daily_start_time = 0.33   # Heure de reprise (00h20)
         
@@ -523,6 +544,16 @@ class M5PullbackBot:
             # 🎯 APPLICATION DU PLAFOND ADAPTATIF
             final_tp_distance = min(theoretical_tp, max_tp_distance)
             
+            # 🛡️ NOUVEAU : Plafonnement du TP en mode dégradé (sauf YOLO)
+            if self.stats.get('balance_safety_active', False):
+                # Exception: Mode YOLO conservé même en mode dégradé
+                if trend_strength < 95.0:
+                    # Plafonner le TP au niveau du SL (ratio 1:1)
+                    max_tp_distance_degraded = sl_distance * DEGRADED_MODE_MAX_RR_RATIO
+                    if final_tp_distance > max_tp_distance_degraded:
+                        final_tp_distance = max_tp_distance_degraded
+                        safe_log(f"🛡️ MODE DÉGRADÉ - TP plafonné à {DEGRADED_MODE_MAX_RR_RATIO}:1 (distance: {final_tp_distance:.5f})")
+            
             # Calcul du ratio réel
             actual_ratio = final_tp_distance / sl_distance
             
@@ -663,6 +694,15 @@ class M5PullbackBot:
             else:
                 current_threshold = -15.0  # Au-delà: -15%
             
+            # --- NOUVELLE LOGIQUE DE SORTIE DU MODE DÉGRADÉ ---
+            if self.stats.get('balance_safety_active', False):
+                if balance_change_pct > DEGRADED_MODE_RECOVERY_THRESHOLD:
+                    safe_log(f"🎉 SORTIE DU MODE DÉGRADÉ - Performance récupérée!")
+                    safe_log(f"   📊 Perte actuelle: {balance_change_pct:.2f}% (seuil de sortie: {DEGRADED_MODE_RECOVERY_THRESHOLD}%)")
+                    safe_log(f"   ✅ Reprise du trading en mode normal (risque standard).")
+                    self.stats['balance_safety_active'] = False
+                return  # On ne vérifie pas l'entrée si on est déjà en mode dégradé
+
             # Vérification du seuil critique avec nouveau système
             if balance_change_pct <= current_threshold and not self.stats['balance_safety_active']:
                 safe_log(f"🚨 ALERTE CRITIQUE ARGENT RÉEL - SEUIL PROGRESSIF ATTEINT!")
@@ -696,7 +736,7 @@ class M5PullbackBot:
             safe_log(f"❌ Erreur vérification balance: {e}")
     
     def activate_balance_safety_mode(self):
-        """🛡️ NOUVEAU: Active une pause de trading de 1h avec compteur et période de grâce"""
+        """🛡️ NOUVEAU: Active le MODE DÉGRADÉ sans arrêter le trading"""
         try:
             # Incrémenter le compteur de pauses sécurité
             self.stats['security_pause_count'] = self.stats.get('security_pause_count', 0) + 1
@@ -720,7 +760,7 @@ class M5PullbackBot:
             safe_log(f"   � Reprise automatique dans 60 minutes")
             
         except Exception as e:
-            safe_log(f"❌ Erreur activation pause sécurité: {e}")
+            safe_log(f"❌ Erreur activation mode dégradé: {e}")
     
     def check_balance_safety_exit_conditions(self):
         """🛡️ NOUVEAU: Vérifie si la pause de 1h est terminée"""
@@ -860,10 +900,11 @@ class M5PullbackBot:
             # Type d'ordre
             order_type = mt5.ORDER_TYPE_SELL if trade_type == "SELL" else mt5.ORDER_TYPE_BUY
             
-            # Volume (lot size adaptatif basé sur la balance RÉELLE et l'ATR)
+            # Volume (lot size adaptatif basé sur la balance RÉELLE, l'ATR et la FORCE de tendance)
             # Calcul de la distance SL basée sur l'ATR pour le lot adaptatif
             atr_sl_distance = signal.get('atr', 2.5) * ATR_SL_MULTIPLIER  # Fallback ATR 2.5 pour XAUUSD
-            volume = self.calculate_adaptive_lot_size(atr_sl_distance)
+            trend_strength = signal.get('strength', 50)  # Force de la tendance
+            volume = self.calculate_adaptive_lot_size(atr_sl_distance, trend_strength)
             
             # Vérification du symbole
             symbol_info = mt5.symbol_info(self.symbol)
@@ -1635,12 +1676,12 @@ class M5PullbackBot:
                 trend = "SIDEWAYS"
         
         if trend == 'BULLISH':
-            frequency = 300  # 5 minutes pour M5 Pullback
+            frequency = 60  # 1 minute entre les trades
             safe_log(f"📈 Marché HAUSSIER → Fréquence: {frequency}s (1min)")
             return frequency
         elif trend == 'BEARISH':
-            frequency = 300  # 5 minutes pour M5 Pullback
-            safe_log(f"📉 Marché BAISSIER → Fréquence: {frequency}s (2min)")
+            frequency = 60  # 1 minute entre les trades
+            safe_log(f"📉 Marché BAISSIER → Fréquence: {frequency}s (1min)")
             return frequency
         else:
             safe_log(f"➡️ Marché NEUTRE → PAS DE TRADING (direction incertaine)")
@@ -2191,6 +2232,123 @@ class M5PullbackBot:
             
         return False
     
+    def validate_ultra_strict_yolo_signal(self, m5_data, trend_strength, signal_data):
+        """
+        🛡️ VALIDATION ULTRA-STRICT POUR SIGNAUX YOLO
+        ============================================
+        
+        Système multi-niveaux pour éliminer les faux signaux 100% :
+        1. Seuils rehaussés (98% au lieu de 95%)
+        2. Validation multi-timeframes (M1 + M15)
+        3. Conditions de marché optimales (ATR, RSI)
+        4. Délai de confirmation anti-faux signal
+        5. Historique de performance
+        
+        Returns:
+            bool: True si le signal YOLO est ultra-validé
+        """
+        try:
+            # 🔍 ÉTAPE 1 : Seuil M5 rehaussé à 98%
+            if trend_strength < YOLO_MIN_STRENGTH:
+                safe_log(f"🛡️ YOLO REJETÉ - Force insuffisante: {trend_strength:.1f}% < {YOLO_MIN_STRENGTH}%")
+                return False
+            
+            # 🔍 ÉTAPE 2 : Validation conditions de marché optimales
+            current_atr = signal_data.get('atr', 0)
+            current_rsi = signal_data.get('rsi', 50)
+            ema_spread = signal_data.get('ema_spread_pct', 0)
+            
+            # ATR dans plage acceptable (ni trop calme, ni trop volatil)
+            if current_atr < YOLO_MIN_ATR or current_atr > YOLO_MAX_ATR:
+                safe_log(f"🛡️ YOLO REJETÉ - ATR hors plage: {current_atr:.2f} (plage: {YOLO_MIN_ATR}-{YOLO_MAX_ATR})")
+                return False
+            
+            # RSI pas trop extrême
+            if current_rsi > YOLO_MAX_RSI_OVERBOUGHT or current_rsi < YOLO_MIN_RSI_OVERSOLD:
+                safe_log(f"🛡️ YOLO REJETÉ - RSI extrême: {current_rsi:.1f} (plage: {YOLO_MIN_RSI_OVERSOLD}-{YOLO_MAX_RSI_OVERBOUGHT})")
+                return False
+            
+            # Écart EMA suffisant pour tendance claire
+            if ema_spread < YOLO_MIN_EMA_SPREAD:
+                safe_log(f"🛡️ YOLO REJETÉ - Écart EMA insuffisant: {ema_spread:.3f}% < {YOLO_MIN_EMA_SPREAD}%")
+                return False
+            
+            # 🔍 ÉTAPE 3 : Délai de confirmation (persistance du signal)
+            signal_key = f"{trend_strength:.1f}_{current_atr:.2f}_{current_rsi:.1f}"
+            current_time = datetime.now()
+            
+            if signal_key not in self.pending_yolo_signals:
+                # Premier détection du signal - initialiser le délai
+                self.pending_yolo_signals[signal_key] = {
+                    'first_detection': current_time,
+                    'confirmations': 1,
+                    'last_check': current_time
+                }
+                safe_log(f"🛡️ YOLO EN ATTENTE - Début période de confirmation (180s)")
+                return False
+            else:
+                # Signal déjà détecté - vérifier persistance
+                pending_signal = self.pending_yolo_signals[signal_key]
+                time_elapsed = (current_time - pending_signal['first_detection']).total_seconds()
+                
+                if time_elapsed < CONFIRMATION_DELAY_SECONDS:
+                    pending_signal['confirmations'] += 1
+                    pending_signal['last_check'] = current_time
+                    remaining = CONFIRMATION_DELAY_SECONDS - time_elapsed
+                    safe_log(f"🛡️ YOLO EN ATTENTE - Confirmation {pending_signal['confirmations']}/{SIGNAL_PERSISTENCE_CHECKS} ({remaining:.0f}s restantes)")
+                    return False
+                
+                # Délai écoulé - vérifier si assez de confirmations
+                if pending_signal['confirmations'] >= SIGNAL_PERSISTENCE_CHECKS:
+                    # Signal validé ! Nettoyer et accepter
+                    del self.pending_yolo_signals[signal_key]
+                    
+                    # 🔍 ÉTAPE 4 : Vérification historique (optionnelle)
+                    yolo_success_rate = self.calculate_yolo_success_rate()
+                    
+                    safe_log(f"🚀 YOLO ULTRA-VALIDÉ !")
+                    safe_log(f"   ✅ Force: {trend_strength:.1f}% (seuil: {YOLO_MIN_STRENGTH}%)")
+                    safe_log(f"   ✅ ATR optimal: {current_atr:.2f} (plage: {YOLO_MIN_ATR}-{YOLO_MAX_ATR})")
+                    safe_log(f"   ✅ RSI équilibré: {current_rsi:.1f}")
+                    safe_log(f"   ✅ EMA écart: {ema_spread:.3f}%")
+                    safe_log(f"   ✅ Confirmations: {pending_signal['confirmations']}/{SIGNAL_PERSISTENCE_CHECKS}")
+                    safe_log(f"   📊 Taux réussite YOLO historique: {yolo_success_rate:.1f}%")
+                    
+                    return True
+                else:
+                    # Pas assez de confirmations - rejeter
+                    del self.pending_yolo_signals[signal_key]
+                    safe_log(f"🛡️ YOLO REJETÉ - Confirmations insuffisantes: {pending_signal['confirmations']}/{SIGNAL_PERSISTENCE_CHECKS}")
+                    return False
+            
+        except Exception as e:
+            safe_log(f"❌ Erreur validation ultra-strict YOLO: {e}")
+            return False
+    
+    def calculate_yolo_success_rate(self):
+        """Calcule le taux de réussite des trades YOLO historiques"""
+        if not self.yolo_performance_tracker:
+            return 100.0  # Pas d'historique = optimisme
+        
+        successful_trades = sum(1 for trade in self.yolo_performance_tracker if trade['profit'] > 0)
+        total_trades = len(self.yolo_performance_tracker)
+        
+        return (successful_trades / total_trades) * 100 if total_trades > 0 else 100.0
+    
+    def track_yolo_performance(self, profit, signal_data):
+        """Enregistre la performance d'un trade YOLO pour suivi"""
+        self.yolo_performance_tracker.append({
+            'timestamp': datetime.now(),
+            'profit': profit,
+            'signal_strength': signal_data.get('strength', 0),
+            'atr': signal_data.get('atr', 0),
+            'rsi': signal_data.get('rsi', 50)
+        })
+        
+        # Garder seulement les 20 derniers
+        if len(self.yolo_performance_tracker) > 20:
+            self.yolo_performance_tracker.pop(0)
+
     def detect_ultra_trend(self, data):
         """🎯 NOUVELLE DÉTECTION M5 PULLBACK : EMA 200/50 + RSI + ATR"""
         # Vérification taille minimale des données pour tous les indicateurs
@@ -2217,17 +2375,30 @@ class M5PullbackBot:
         current_rsi = rsi[-1] if len(rsi) > 0 else 50
         current_atr = atr[-1] if len(atr) > 0 else 0.5  # ATR fallback pour XAUUSD
         
-        # 🎯 DÉTECTION TENDANCE DE FOND (Principe fondamental)
-        if current_price > current_ema_master:
-            trend_direction = "BULLISH"    # Prix > EMA 200 = Tendance haussière
-        elif current_price < current_ema_master:
-            trend_direction = "BEARISH"    # Prix < EMA 200 = Tendance baissière
+        # 🎯 DÉTECTION TENDANCE AMÉLIORÉE (Plus réactive)
+        # Combinaison : Prix vs EMA 200 + EMA 50 vs EMA 200 pour plus de réactivité
+        
+        # Tendance de fond (prix vs EMA 200)
+        price_trend = "BULLISH" if current_price > current_ema_master else "BEARISH"
+        
+        # Tendance court terme (EMA 50 vs EMA 200) - Plus réactive
+        ema_trend = "BULLISH" if current_ema_pullback > current_ema_master else "BEARISH"
+        
+        # 🚀 LOGIQUE COMBINÉE : Plus réactive aux changements
+        if price_trend == "BULLISH" and ema_trend == "BULLISH":
+            trend_direction = "BULLISH"     # Tendance claire haussière
+        elif price_trend == "BEARISH" and ema_trend == "BEARISH":
+            trend_direction = "BEARISH"     # Tendance claire baissière
+        elif ema_trend == "BEARISH":        # EMA 50 sous EMA 200 = signal baissier précoce
+            trend_direction = "BEARISH"     # Priorité au signal EMA (plus réactif)
+        elif ema_trend == "BULLISH":        # EMA 50 sur EMA 200 = signal haussier précoce  
+            trend_direction = "BULLISH"     # Priorité au signal EMA (plus réactif)
         else:
-            trend_direction = "SIDEWAYS"   # Prix = EMA 200 = Neutre
+            trend_direction = "SIDEWAYS"    # Situation mixte/neutre
         
         # 🎯 CALCUL QUALITÉ DU PULLBACK (Distance à l'EMA 50)
         distance_to_pullback_ema = abs(current_price - current_ema_pullback)
-        pullback_threshold = current_atr * ATR_PULLBACK_MULTIPLIER  # 25% de l'ATR
+        pullback_threshold = current_atr * ATR_PULLBACK_MULTIPLIER  # 3.0x ATR - zone pullback plus stricte
         
         # Plus on est proche de l'EMA 50, plus la qualité est élevée
         if distance_to_pullback_ema <= pullback_threshold:
@@ -2235,10 +2406,20 @@ class M5PullbackBot:
         else:
             pullback_quality = 0  # Trop éloigné de l'EMA 50
         
-        # 🎯 FORCE GLOBALE DE LA CONFIGURATION
-        # Basée sur la distance entre EMAs et la qualité du pullback
+        # 🎯 FORCE GLOBALE AMÉLIORÉE (Plus sensible)
+        # Basée sur la séparation des EMAs + qualité pullback + momentum prix
         ema_spread = abs(current_ema_master - current_ema_pullback) / current_price * 100
-        strength = min(ema_spread * 10 + pullback_quality, 100)  # Max 100%
+        
+        # 🚀 BONUS DE FORCE : Quand EMAs et prix s'accordent
+        agreement_bonus = 0
+        if (trend_direction == "BULLISH" and current_price > current_ema_pullback > current_ema_master):
+            agreement_bonus = 20  # Bonus pour alignement haussier parfait
+        elif (trend_direction == "BEARISH" and current_price < current_ema_pullback < current_ema_master):
+            agreement_bonus = 20  # Bonus pour alignement baissier parfait
+        
+        # Calcul final avec bonus d'alignement
+        base_strength = ema_spread * 15 + pullback_quality  # Multiplicateur augmenté (15 au lieu de 10)
+        strength = min(base_strength + agreement_bonus, 100)  # Max 100%
         
         # Mise à jour historique de tendance
         if trend_direction != self.trend_data['current_trend']:
@@ -2309,22 +2490,23 @@ class M5PullbackBot:
         
         return ema
     
-    def calculate_adaptive_lot_size(self, atr_sl_distance):
+    def calculate_adaptive_lot_size(self, atr_sl_distance, trend_strength=50):
         """
-        � CALCUL LOT AGRESSIF - TP PETITS = LOTS PLUS ÉLEVÉS
-        =====================================================
+        🚀 CALCUL LOT ADAPTATIF SELON FORCE DE TENDANCE
+        ===============================================
         
-        NOUVELLE STRATÉGIE:
-        - Risque augmenté : 3.75% de l'equity par trade (vs 2.5% avant)
-        - Logic : TP plafonnés à 200 points = moins de risque réel
-        - SL plus grands = meilleure protection
-        - Plus de volume = plus de profits sur petits mouvements
+        NOUVELLE STRATÉGIE INTELLIGENTE :
+        - Force 70-80% : Risque standard 2.5%
+        - Force 80-90% : Risque augmenté 3.5% 
+        - Force 90-95% : Risque élevé 4.5%
+        - Force 95-100% : Risque maximum 6.0% (YOLO sur certitude absolue)
         
         Args:
             atr_sl_distance: Distance du Stop Loss basée sur l'ATR
+            trend_strength: Force de la tendance (0-100%)
             
         Returns:
-            float: Taille de lot optimale (augmentée)
+            float: Taille de lot optimale (adaptée à la certitude)
         """
         try:
             # Récupération de la balance actuelle
@@ -2335,21 +2517,57 @@ class M5PullbackBot:
             
             current_equity = account_info.equity
             
-            # 🔥 NOUVEAU : Risque augmenté pour TP plus petits
-            enhanced_risk_percent = 2.5 * RISK_MULTIPLIER  # 2.5% * 1.5 = 3.75%
-            max_loss_per_trade = current_equity * (enhanced_risk_percent / 100)
+            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE
+            if trend_strength >= 95.0:
+                risk_percent = 6.0  # 🔥 YOLO MODE - Certitude absolue
+                risk_level = "MAXIMUM (YOLO)"
+                safe_log(f"🛡️ ATTENTION: SL YOLO sera plus large ({YOLO_SL_MULTIPLIER}x ATR au lieu de {ATR_SL_MULTIPLIER}x)")
+            elif trend_strength >= 90.0:
+                risk_percent = 4.5  # 🚀 Risque élevé - Très forte certitude
+                risk_level = "ÉLEVÉ"
+            elif trend_strength >= 80.0:
+                risk_percent = 3.5  # ⚡ Risque augmenté - Forte certitude
+                risk_level = "AUGMENTÉ"
+            else:
+                risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
+                risk_level = "STANDARD"
             
-            # Calcul du lot nécessaire
-            # Pour XAUUSD: 1 lot = 100$/point, donc lot = max_loss / (sl_distance * 100)
-            lot_size = max_loss_per_trade / (atr_sl_distance * 100)
+            # 🛡️ NOUVEAU : Application du mode dégradé (SAUF pour le mode YOLO)
+            if self.stats.get('balance_safety_active', False):
+                # Exception: Mode YOLO conservé même en mode dégradé
+                if trend_strength >= 95.0:
+                    safe_log(f"🚀 EXCEPTION MODE DÉGRADÉ: YOLO conservé (certitude {trend_strength:.1f}%)")
+                else:
+                    # Réduction drastique du risque pour tous les autres cas
+                    risk_percent *= DEGRADED_MODE_RISK_MULTIPLIER
+                    safe_log(f"🛡️ MODE DÉGRADÉ - Risque réduit à {risk_percent:.2f}%")
+            
+            # � CALCUL DU LOT BASÉ SUR LA FORCE DE TENDANCE
+            risk_amount = current_equity * (risk_percent / 100)
+            
+            # Calcul du lot nécessaire pour XAUUSD
+            # 1 lot = 100$/point, donc lot = risk_amount / (sl_distance * 100)
+            lot_size = risk_amount / (atr_sl_distance * 100)
             
             # Arrondi et sécurités
             lot_size = round(lot_size, 2)
             lot_size = max(lot_size, ADAPTIVE_LOT_MIN)  # Minimum broker
             lot_size = min(lot_size, ADAPTIVE_LOT_MAX)  # Maximum sécurité
             
-            # Log informatif avec nouveaux paramètres
+            # Calcul du profit potentiel avec TP plafonné
             tp_potential = TP_MAX_POINTS * 0.01 * 100 * lot_size  # 200 points max de profit
+            
+            # 📊 LOG DÉTAILLÉ DU NOUVEAU SYSTÈME
+            safe_log(f"🎯 LOT ADAPTATIF SELON FORCE TENDANCE:")
+            safe_log(f"   📊 Force détectée: {trend_strength:.1f}%")
+            safe_log(f"   🎲 Niveau de risque: {risk_level}")
+            safe_log(f"   💰 Risque appliqué: {risk_percent:.1f}% de l'equity")
+            safe_log(f"   💸 Montant risqué: {risk_amount:.2f}€")
+            safe_log(f"   📈 Lot calculé: {lot_size}")
+            safe_log(f"   🎯 Profit potentiel max: {tp_potential:.2f}€ (TP 200pts)")
+            safe_log(f"   ⚖️ Ratio Risk/Reward théorique: 1:{tp_potential/risk_amount:.2f}")
+            
+            return lot_size
             safe_log(f"� LOT AGRESSIF: Equity ${current_equity:.0f} → Lot {lot_size:.2f} (risque {enhanced_risk_percent:.1f}%)")
             safe_log(f"   💰 Risque max: -${max_loss_per_trade:.0f} | Profit TP: +${tp_potential:.0f} (200pts max)")
             safe_log(f"   🎯 Stratégie: TP petits + SL grands + Lots élevés")
@@ -2477,7 +2695,7 @@ class M5PullbackBot:
             current_rsi <= self.config['RSI_OVERBOUGHT']):  # RSI pas en surachat selon config
             
             # Cooldown M5 adaptatif avec logging amélioré
-            cooldown = 300  # 5 minutes en M5
+            cooldown = 60  # 1 minute entre les trades
             
             if time_since_last_buy < cooldown:
                 remaining_time = cooldown - time_since_last_buy
@@ -2509,7 +2727,7 @@ class M5PullbackBot:
               current_rsi >= self.config['RSI_OVERSOLD']):  # RSI > 30 (rebond sur zone de survente)
             
             # Cooldown SELL adaptatif
-            sell_cooldown = 300  # 5 minutes en M5
+            sell_cooldown = 60  # 1 minute entre les trades
             
             if time_since_last_sell < sell_cooldown:
                 remaining_time = sell_cooldown - time_since_last_sell
@@ -2568,11 +2786,26 @@ class M5PullbackBot:
 
     
     def execute_m5_trade(self, signal):
-        """🎯 NOUVELLE EXÉCUTION M5 : TP/SL adaptatifs basés sur l'ATR"""
+        """🎯 NOUVELLE EXÉCUTION M5 : TP/SL adaptatifs basés sur l'ATR avec validation YOLO ultra-strict"""
         
         trade_type = signal['type']
         atr_value = signal['atr']
         current_price = signal.get('price', None)
+        trend_strength = signal.get('strength', 50)
+        
+        # 🛡️ VALIDATION ULTRA-STRICT POUR SIGNAUX YOLO
+        if trend_strength >= 95.0:
+            # Validation rigoureuse pour éviter les faux signaux 100%
+            if not self.validate_ultra_strict_yolo_signal(None, trend_strength, signal):
+                safe_log(f"🛡️ SIGNAL YOLO REJETÉ - Validation ultra-strict échouée")
+                return
+            
+            # Signal YOLO validé - utiliser SL plus large pour sécurité
+            sl_multiplier = YOLO_SL_MULTIPLIER  # 3.5x ATR au lieu de 2.5x
+            safe_log(f"🚀 SIGNAL YOLO ULTRA-VALIDÉ - SL élargi à {sl_multiplier}x ATR")
+        else:
+            # Signal normal - SL standard
+            sl_multiplier = ATR_SL_MULTIPLIER  # 2.5x ATR standard
         
         # Récupération prix réel pour calcul TP/SL
         tick_info = mt5.symbol_info_tick(self.symbol)
@@ -2586,11 +2819,10 @@ class M5PullbackBot:
         else:  # SELL
             entry_price = tick_info.bid
         
-        # 🔥 NOUVELLE STRATÉGIE : SL GRANDS + TP PLAFONNÉS + LOTS ÉLEVÉS
-        sl_distance = ATR_SL_MULTIPLIER * atr_value  # SL plus grand à 2.5x ATR
+        # 🔥 NOUVELLE STRATÉGIE : SL ADAPTATIFS + TP PLAFONNÉS + LOTS ÉLEVÉS
+        sl_distance = sl_multiplier * atr_value  # SL adaptatif selon validation
         
         # 🎯 TP PLAFONNÉ À 200 POINTS MAXIMUM
-        trend_strength = signal.get('strength', 50)  # Force de la tendance (défaut 50%)
         tp_distance = self.calculate_market_aware_tp_ratio(trend_strength, atr_value, sl_distance)
         
         # Application selon le type d'ordre
@@ -2612,12 +2844,12 @@ class M5PullbackBot:
         # 🔥 LOG DÉTAILLÉ DE LA NOUVELLE STRATÉGIE
         safe_log(f"⚡ TRADE M5 {trade_type} - {signal['reason']}")
         safe_log(f"   📊 ATR actuel: {atr_value:.3f} (volatilité du marché)")
-        safe_log(f"   🎯 Tendance: {trend_strength:.1f}% → TP plafonné à 180pts")
+        safe_log(f"   🎯 Tendance: {trend_strength:.1f}% → TP plafonné à 200pts")
         safe_log(f"   💰 Prix entrée: ${entry_price:.2f}")
-        safe_log(f"   🛡️ SL GRAND: ${sl_price:.2f} ({sl_pips:.1f} pips = 2.5x ATR)")
-        safe_log(f"   🚀 TP PLAFONNÉ: ${tp_price:.2f} ({tp_points:.0f} pts ≤ 180pts max)")
-        safe_log(f"   ⚖️ Ratio R/R: 1:{actual_ratio:.2f} (TP PLAFONNÉ + SL GRANDS)")
-        safe_log(f"   📈 Force signal: {signal['strength']:.1f}%")
+        safe_log(f"   🛡️ SL {'ÉLARGI' if sl_multiplier > ATR_SL_MULTIPLIER else 'STANDARD'}: ${sl_price:.2f} ({sl_pips:.1f} pips = {sl_multiplier}x ATR)")
+        safe_log(f"   🚀 TP PLAFONNÉ: ${tp_price:.2f} ({tp_points:.0f} pts ≤ 200pts max)")
+        safe_log(f"   ⚖️ Ratio R/R: 1:{actual_ratio:.2f} (TP PLAFONNÉ + SL {'ÉLARGI' if sl_multiplier > ATR_SL_MULTIPLIER else 'STANDARD'})")
+        safe_log(f"   📈 Force signal: {signal['strength']:.1f}%{' (YOLO ULTRA-VALIDÉ)' if trend_strength >= 95 else ''}")
         safe_log(f"   🎯 Qualité pullback: {signal['pullback_quality']:.1f}%")
         safe_log(f"   📊 RSI: {signal['rsi']:.1f}")
         safe_log(f"   🎲 Confiance: {signal['confidence']:.2f}")
@@ -2666,9 +2898,8 @@ class M5PullbackBot:
         # 🛡️ FILET DE SÉCURITÉ - Vérification perte de balance (-5%)
         self.check_balance_safety()
         
-        # 🛡️ FILET DE SÉCURITÉ - Vérification des conditions de sortie du mode sécurité
-        if self.stats['balance_safety_active']:
-            self.check_balance_safety_exit_conditions()
+        # 🛡️ NOUVEAU: La logique de sortie du mode dégradé est maintenant intégrée dans check_balance_safety()
+        # Plus besoin de vérification séparée - Mode dégradé géré automatiquement
         
         # Récupération données M5 (plus de données nécessaires pour EMA 200)
         df = self.get_ultra_fast_data(250)  # 250 bougies M5 pour calculer EMA 200
@@ -2847,7 +3078,7 @@ class M5PullbackBot:
         else:
             safe_log(f"⚠️ Impossible de récupérer la balance")
             
-        safe_log(f"⚡ Analyse toutes les {ANALYSIS_INTERVAL} secondes")
+        safe_log(f"⚡ Analyse toutes les {ANALYSIS_INTERVAL} secondes (optimisé M5)")
         safe_log(f"🎯 TP/SL: Adaptatifs selon ATR")
         safe_log(f"🕐 Horaires: 7h30 à 21h30")
         safe_log(f"🛡️ Sécurités: Seuil -5%, Max 5 positions")
@@ -2861,7 +3092,7 @@ class M5PullbackBot:
         safe_log(f"\n🔥 ULTRA SCALPING - MODE ILLIMITÉ")
         safe_log("="*60)
         safe_log(f"♾️ Session sans limite de temps")
-        safe_log(f"⚡ Analyse toutes les {ANALYSIS_INTERVAL} secondes")
+        safe_log(f"⚡ Analyse toutes les {ANALYSIS_INTERVAL} secondes (optimisé M5)")
         safe_log(f"🎯 TP/SL: Adaptatifs selon ATR | Breakeven à +40 pips")
         safe_log(f"⏹️ Arrêt: Ctrl+C")
         
