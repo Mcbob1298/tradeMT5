@@ -3448,7 +3448,16 @@ class M5PullbackBot:
         if strength < 80:
             safe_log(f"   ❌ Force insuffisante: {strength:.1f}% < 80% requis")
         if pullback_quality < 60:
+            # Calcul explicatif pour le pullback
+            distance_to_ema50 = abs(current_price - ema_pullback)
+            pullback_threshold = current_atr * 3.0  # ATR_PULLBACK_MULTIPLIER
             safe_log(f"   ❌ Pullback faible: {pullback_quality:.0f}% < 60% requis")
+            safe_log(f"      📏 Distance prix/EMA50: {distance_to_ema50:.4f} | Seuil max: {pullback_threshold:.4f} (3.0×ATR)")
+            safe_log(f"      💰 Prix: {current_price:.4f} | EMA50: {ema_pullback:.4f}")
+            if distance_to_ema50 > pullback_threshold:
+                safe_log(f"      🚫 TROP ÉLOIGNÉ: Prix dépasse la zone pullback de {(distance_to_ema50/pullback_threshold*100-100):.1f}%")
+            else:
+                safe_log(f"      ⚡ Dans zone pullback mais qualité: {pullback_quality:.1f}%")
         if current_rsi < 30 or current_rsi > 70:
             safe_log(f"   ⚡ RSI en zone: {current_rsi:.1f} (30-70 = neutre)")
         if current_atr < 1.5 or current_atr > 7.0:
