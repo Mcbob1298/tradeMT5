@@ -118,7 +118,7 @@ RSI_SELL_MIN = 45              # RSI minimum pour SELL (faiblesse confirmée)
 RSI_SELL_MAX = 60              # RSI maximum pour SELL (rebond s'essoufle)
 
 # 🎯 PARAMÈTRES M5 PULLBACK (Qualité > Quantité)
-# COOLDOWN : 1 minute entre les trades pour éviter le sur-trading
+# COOLDOWN : 5 minutes entre les trades pour éviter le sur-trading
 
 # 🛡️ GESTION DU MODE DÉGRADÉ (NOUVEAU)
 DEGRADED_MODE_RISK_MULTIPLIER = 0.2  # Risque = 20% du risque normal (2.5% -> 0.5%)
@@ -127,7 +127,7 @@ DEGRADED_MODE_MAX_RR_RATIO = 1.0  # Ratio R/R plafonné à 1:1 en mode dégradé
 
 # 🛡️ VALIDATION ULTRA-STRICT POUR SIGNAUX YOLO (NOUVEAU)
 YOLO_MIN_STRENGTH = 98.0              # 98% au lieu de 95% (plus strict)
-YOLO_MIN_EMA_SPREAD = 0.15            # Écart minimum EMAs (0.15% minimum) 
+YOLO_MIN_EMA_SPREAD = 0.05            # Écart minimum EMAs (0.05% minimum - réduit pour plus de flexibilité) 
 YOLO_MAX_RSI_OVERBOUGHT = 75          # RSI pas trop extrême
 YOLO_MIN_RSI_OVERSOLD = 25            # RSI pas trop extrême
 YOLO_SL_MULTIPLIER = 3.5              # SL plus large (3.5x ATR au lieu de 2.5x)
@@ -188,7 +188,7 @@ class M5PullbackBot:
         
         # 🎯 NOUVEAU FILTRE ULTRA-STRICT
         safe_log(f"⚡ FILTRE TENDANCE ULTRA-STRICT ACTIVÉ:")
-        safe_log(f"   🎯 Seuil minimum: 70% de certitude sur la tendance")
+        safe_log(f"   🎯 Seuil minimum: 80% de certitude sur la tendance")
         safe_log(f"   ✅ Seuls les signaux très fiables seront tradés")
         safe_log(f"   🛡️ Qualité >>> Quantité - Protection maximale")
         
@@ -1676,12 +1676,12 @@ class M5PullbackBot:
                 trend = "SIDEWAYS"
         
         if trend == 'BULLISH':
-            frequency = 60  # 1 minute entre les trades
-            safe_log(f"📈 Marché HAUSSIER → Fréquence: {frequency}s (1min)")
+            frequency = 300  # 5 minutes entre les trades
+            safe_log(f"📈 Marché HAUSSIER → Fréquence: {frequency}s (5min)")
             return frequency
         elif trend == 'BEARISH':
-            frequency = 60  # 1 minute entre les trades
-            safe_log(f"📉 Marché BAISSIER → Fréquence: {frequency}s (1min)")
+            frequency = 300  # 5 minutes entre les trades
+            safe_log(f"📉 Marché BAISSIER → Fréquence: {frequency}s (5min)")
             return frequency
         else:
             safe_log(f"➡️ Marché NEUTRE → PAS DE TRADING (direction incertaine)")
@@ -2375,26 +2375,47 @@ class M5PullbackBot:
         current_rsi = rsi[-1] if len(rsi) > 0 else 50
         current_atr = atr[-1] if len(atr) > 0 else 0.5  # ATR fallback pour XAUUSD
         
-        # 🎯 DÉTECTION TENDANCE AMÉLIORÉE (Plus réactive)
-        # Combinaison : Prix vs EMA 200 + EMA 50 vs EMA 200 pour plus de réactivité
+        # 🎯 DÉTECTION TENDANCE AMÉLIORÉE (Plus réactive aux retournements)
+        # Combinaison : Prix vs EMA 200 + momentum récent + confirmation EMA
         
         # Tendance de fond (prix vs EMA 200)
         price_trend = "BULLISH" if current_price > current_ema_master else "BEARISH"
         
-        # Tendance court terme (EMA 50 vs EMA 200) - Plus réactive
+        # Tendance court terme (EMA 50 vs EMA 200)
         ema_trend = "BULLISH" if current_ema_pullback > current_ema_master else "BEARISH"
         
-        # 🚀 LOGIQUE COMBINÉE : Plus réactive aux changements
-        if price_trend == "BULLISH" and ema_trend == "BULLISH":
+        # 🔥 SIGNAL ADDITIONNEL : Prix sous EMA50 = signal baissier fort
+        price_vs_ema50 = "BULLISH" if current_price > current_ema_pullback else "BEARISH"
+        
+        # 🚀 MOMENTUM RÉCENT : Analyse des 5 dernières bougies pour détecter retournements
+        recent_momentum = "NEUTRAL"
+        if len(close_prices) >= 5:
+            # Analyse sur 5 bougies pour plus de sensibilité
+            recent_change = close_prices[-1] - close_prices[-5]  # Change sur 5 bougies
+            momentum_threshold = current_atr * 0.3  # Seuil réduit pour plus de sensibilité
+            
+            if recent_change > momentum_threshold:
+                recent_momentum = "BULLISH"
+            elif recent_change < -momentum_threshold:
+                recent_momentum = "BEARISH"
+        
+        # 🚀 LOGIQUE COMBINÉE : Détection précoce des retournements baissiers
+        if recent_momentum == "BEARISH" or price_vs_ema50 == "BEARISH":
+            # Momentum baissier OU prix sous EMA50 = signal baissier prioritaire
+            trend_direction = "BEARISH"
+        elif recent_momentum == "BULLISH" and price_vs_ema50 == "BULLISH":
+            # Momentum haussier ET prix au-dessus EMA50 = signal haussier fort
+            trend_direction = "BULLISH"
+        elif price_trend == "BULLISH" and ema_trend == "BULLISH":
             trend_direction = "BULLISH"     # Tendance claire haussière
         elif price_trend == "BEARISH" and ema_trend == "BEARISH":
             trend_direction = "BEARISH"     # Tendance claire baissière
-        elif ema_trend == "BEARISH":        # EMA 50 sous EMA 200 = signal baissier précoce
-            trend_direction = "BEARISH"     # Priorité au signal EMA (plus réactif)
-        elif ema_trend == "BULLISH":        # EMA 50 sur EMA 200 = signal haussier précoce  
-            trend_direction = "BULLISH"     # Priorité au signal EMA (plus réactif)
+        elif price_trend == "BEARISH":      # Prix en baisse = signal prioritaire
+            trend_direction = "BEARISH"     # Le prix prime sur les EMAs
+        elif price_trend == "BULLISH":      # Prix en hausse = signal prioritaire
+            trend_direction = "BULLISH"     # Le prix prime sur les EMAs  
         else:
-            trend_direction = "SIDEWAYS"    # Situation mixte/neutre
+            trend_direction = "SIDEWAYS"    # Situation neutre
         
         # 🎯 CALCUL QUALITÉ DU PULLBACK (Distance à l'EMA 50)
         distance_to_pullback_ema = abs(current_price - current_ema_pullback)
@@ -2496,10 +2517,10 @@ class M5PullbackBot:
         ===============================================
         
         NOUVELLE STRATÉGIE INTELLIGENTE :
-        - Force 70-80% : Risque standard 2.5%
-        - Force 80-90% : Risque augmenté 3.5% 
-        - Force 90-95% : Risque élevé 4.5%
-        - Force 95-100% : Risque maximum 6.0% (YOLO sur certitude absolue)
+        - Force 80-89% : Risque standard 2.5%
+        - Force 90-94% : Risque augmenté 3.5% 
+        - Force 95-97% : Risque élevé 4.5%
+        - Force 98-100% : Risque maximum 6.0% (YOLO sur certitude absolue)
         
         Args:
             atr_sl_distance: Distance du Stop Loss basée sur l'ATR
@@ -2646,7 +2667,7 @@ class M5PullbackBot:
         return [50] * period + rsi_values
     
     def should_open_position(self, trend, strength, indicators, time_since_last_buy=None):
-        """🎯 LOGIQUE M5 PULLBACK ULTRA-SÉLECTIVE : 70% de certitude minimum"""
+        """🎯 LOGIQUE M5 PULLBACK ULTRA-SÉLECTIVE : 80% de certitude minimum"""
         
         current_time = datetime.now()
         current_price = indicators['price']
@@ -2660,10 +2681,10 @@ class M5PullbackBot:
         if self.stats['balance_safety_active']:
             return None  # Pas de nouveaux trades en mode sécurité
         
-        # 🎯 FILTRE QUALITÉ ULTRA-STRICT : 70% de certitude sur la tendance
-        if strength < 70:  # ⚡ NOUVEAU SEUIL : 70% minimum (au lieu de 30%)
+        # 🎯 FILTRE QUALITÉ ULTRA-STRICT : 80% de certitude sur la tendance
+        if strength < 80:  # ⚡ NOUVEAU SEUIL : 80% minimum (au lieu de 70%)
             if strength >= 30:  # Log informatif pour les signaux rejetés
-                safe_log(f"❌ SIGNAL REJETÉ: Force {strength:.1f}% < 70% requis - Pas assez fiable")
+                safe_log(f"❌ SIGNAL REJETÉ: Force {strength:.1f}% < 80% requis - Pas assez fiable")
             return None
         
         if pullback_quality < 60:  # Qualité pullback minimale (60%)
@@ -2695,7 +2716,7 @@ class M5PullbackBot:
             current_rsi <= self.config['RSI_OVERBOUGHT']):  # RSI pas en surachat selon config
             
             # Cooldown M5 adaptatif avec logging amélioré
-            cooldown = 60  # 1 minute entre les trades
+            cooldown = 300  # 5 minutes entre les trades
             
             if time_since_last_buy < cooldown:
                 remaining_time = cooldown - time_since_last_buy
@@ -2727,7 +2748,7 @@ class M5PullbackBot:
               current_rsi >= self.config['RSI_OVERSOLD']):  # RSI > 30 (rebond sur zone de survente)
             
             # Cooldown SELL adaptatif
-            sell_cooldown = 60  # 1 minute entre les trades
+            sell_cooldown = 300  # 5 minutes entre les trades
             
             if time_since_last_sell < sell_cooldown:
                 remaining_time = sell_cooldown - time_since_last_sell
@@ -2798,11 +2819,13 @@ class M5PullbackBot:
             # Validation rigoureuse pour éviter les faux signaux 100%
             if not self.validate_ultra_strict_yolo_signal(None, trend_strength, signal):
                 safe_log(f"🛡️ SIGNAL YOLO REJETÉ - Validation ultra-strict échouée")
-                return
-            
-            # Signal YOLO validé - utiliser SL plus large pour sécurité
-            sl_multiplier = YOLO_SL_MULTIPLIER  # 3.5x ATR au lieu de 2.5x
-            safe_log(f"🚀 SIGNAL YOLO ULTRA-VALIDÉ - SL élargi à {sl_multiplier}x ATR")
+                safe_log(f"🔄 FALLBACK: Traitement comme signal normal de haute qualité ({trend_strength:.1f}%)")
+                # Signal traité comme normal mais avec la force d'origine
+                sl_multiplier = ATR_SL_MULTIPLIER  # 2.5x ATR standard
+            else:
+                # Signal YOLO validé - utiliser SL plus large pour sécurité
+                sl_multiplier = YOLO_SL_MULTIPLIER  # 3.5x ATR au lieu de 2.5x
+                safe_log(f"🚀 SIGNAL YOLO ULTRA-VALIDÉ - SL élargi à {sl_multiplier}x ATR")
         else:
             # Signal normal - SL standard
             sl_multiplier = ATR_SL_MULTIPLIER  # 2.5x ATR standard
@@ -2957,9 +2980,9 @@ class M5PullbackBot:
             else:
                 safety_status = f"Balance:OK"
         
-        # 🎯 AFFICHAGE ÉTAT M5 PULLBACK (seuil ultra-strict 70%)
-        strength_status = f"✅{strength:.1f}%" if strength >= 70 else f"❌{strength:.1f}%"
-        safe_log(f"📊 M5 ${current_price:.2f} | {trend} {strength_status}(≥70%) | "
+        # 🎯 AFFICHAGE ÉTAT M5 PULLBACK (seuil ultra-strict 80%)
+        strength_status = f"✅{strength:.1f}%" if strength >= 80 else f"❌{strength:.1f}%"
+        safe_log(f"📊 M5 ${current_price:.2f} | {trend} {strength_status}(≥80%) | "
                 f"RSI:{current_rsi:.1f} | ATR:{current_atr:.3f} | "
                 f"EMA200:{ema_master:.2f} | EMA50:{ema_pullback:.2f} | "
                 f"Pullback:{pullback_quality:.0f}% | Pos:{open_positions_count} | "
@@ -3032,7 +3055,7 @@ class M5PullbackBot:
         safe_log("="*60)
         safe_log(f"⚡ Stratégie: BUY UNIQUEMENT")
         safe_log(f"📉 BEARISH → BUY (sur rebond) toutes les 2min | 🟢 BULLISH → BUY (sur momentum) par minute")
-        safe_log(f"⏰ Cooldown adaptatif: 2min (descente) / 1min (hausse)")
+        safe_log(f"⏰ Cooldown adaptatif: 5 minutes entre tous les trades")
         safe_log(f"🎯 TP/SL: Adaptatifs selon ATR | Breakeven à +40 pips")
         safe_log(f"⏱️ Durée: {duration_minutes} minutes")
         safe_log(f"🔄 Analyse: toutes les {ANALYSIS_INTERVAL} secondes")
