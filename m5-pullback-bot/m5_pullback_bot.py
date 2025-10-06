@@ -76,12 +76,12 @@ print("=" * 60)
 # CONFIGURATION ULTRA SCALPING - ARGENT RÉEL
 # =============================================================================
 ENABLE_REAL_TRADING = True   # ✅ TRADING RÉEL ACTIVÉ - ARGENT RÉEL
-# MT5_LOGIN = 18491073       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
-# MT5_PASSWORD = "mr^WV%U8"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
-# MT5_SERVER = "VantageInternational-Live 4"  # ⚠️ TODO: Vérifier le serveur RÉEL
-MT5_LOGIN = 10007787600       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
-MT5_PASSWORD = "G@Vv0mNf"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
-MT5_SERVER = "MetaQuotes-Demo"  # ⚠️ TODO: Vérifier le serveur RÉEL
+MT5_LOGIN = 18491073       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
+MT5_PASSWORD = "mr^WV%U8"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
+MT5_SERVER = "VantageInternational-Live 4"  # ⚠️ TODO: Vérifier le serveur RÉEL
+# MT5_LOGIN = 10007787600       # ⚠️ TODO: Remplacer par votre numéro de compte RÉEL
+# MT5_PASSWORD = "G@Vv0mNf"    # ⚠️ TODO: Remplacer par votre mot de passe RÉEL
+# MT5_SERVER = "MetaQuotes-Demo"  # ⚠️ TODO: Vérifier le serveur RÉEL
 # 🚫 MODE SIMULATION DÉSACTIVÉ - TRADING RÉEL
 SIMULATE_BALANCE = 500.0     # ❌ Non utilisé en mode réel
 USE_SIMULATION_MODE = False  # ❌ MODE SIMULATION DÉSACTIVÉ
@@ -1949,7 +1949,7 @@ class M5PullbackBot:
         
         # === ANALYSE PULLBACK ===
         safe_log(f"\n🎯 ANALYSE PULLBACK:")
-        safe_log(f"   📊 Qualité pullback: {pullback_quality:.0f}% (seuil: ≥70%)")
+        safe_log(f"   📊 Qualité pullback: {pullback_quality:.0f}% (seuil: ≥60%)")
         
         distance_to_ema50 = abs(current_price - ema_pullback)
         pullback_threshold = current_atr * 3.0  # ATR_PULLBACK_MULTIPLIER
@@ -2006,7 +2006,7 @@ class M5PullbackBot:
             buy_conditions = []
             buy_conditions.append(f"✅ Tendance BULLISH" if strength >= 80 else f"❌ Force {strength:.1f}% < 80%")
             buy_conditions.append(f"✅ Prix > EMA200" if current_price > ema_master else f"❌ Prix {current_price:.2f} <= EMA200 {ema_master:.2f}")
-            buy_conditions.append(f"✅ Pullback OK" if pullback_quality >= 70 else f"❌ Pullback {pullback_quality:.0f}% < 70%")
+            buy_conditions.append(f"✅ Pullback OK" if pullback_quality >= 60 else f"❌ Pullback {pullback_quality:.0f}% < 60%")
             buy_conditions.append(f"✅ RSI OK" if current_rsi <= self.config['RSI_OVERBOUGHT'] else f"❌ RSI {current_rsi:.1f} > {self.config['RSI_OVERBOUGHT']}")
             buy_conditions.append(f"✅ ATR OK" if OPTIMAL_ATR_MIN <= current_atr <= OPTIMAL_ATR_MAX else f"❌ ATR {current_atr:.3f} hors plage")
             
@@ -2018,7 +2018,7 @@ class M5PullbackBot:
             safe_log(f"   📉 ANALYSE SELL:")
             sell_conditions = []
             sell_conditions.append(f"✅ Tendance BEARISH" if strength >= 80 else f"❌ Force {strength:.1f}% < 80%")
-            sell_conditions.append(f"✅ Pullback OK" if pullback_quality >= 70 else f"❌ Pullback {pullback_quality:.0f}% < 70%")
+            sell_conditions.append(f"✅ Pullback OK" if pullback_quality >= 60 else f"❌ Pullback {pullback_quality:.0f}% < 60%")
             sell_conditions.append(f"✅ RSI OK" if self.config['RSI_OVERSOLD'] <= current_rsi <= 65 else f"❌ RSI {current_rsi:.1f} hors zone [30-65]")
             sell_conditions.append(f"✅ ATR OK" if OPTIMAL_ATR_MIN <= current_atr <= OPTIMAL_ATR_MAX else f"❌ ATR {current_atr:.3f} hors plage")
             
@@ -3054,14 +3054,14 @@ class M5PullbackBot:
         
         # 🎯 FILTRE QUALITÉ ULTRA-STRICT : 80% de certitude sur la tendance
         if strength < 80:  # ⚡ NOUVEAU SEUIL : 80% minimum (au lieu de 70%)
-            if strength >= 30:  # Log informatif pour les signaux rejetés
-                safe_log(f"❌ SIGNAL REJETÉ: Force {strength:.1f}% < 80% requis - Pas assez fiable")
-                # 🔍 DIAGNOSTIC COMPLET pour signals faibles
+            safe_log(f"❌ SIGNAL REJETÉ: Force {strength:.1f}% < 80% requis - Pas assez fiable")
+            # 🔍 DIAGNOSTIC COMPLET pour TOUS les signaux rejetés (seuil abaissé)
+            if strength >= 10:  # Diagnostic pour presque tous les signaux
                 self.log_detailed_market_analysis(trend, strength, indicators, "FORCE_INSUFFISANTE")
             return None
         
-        if pullback_quality < 70:  # Qualité pullback minimale (70%)
-            safe_log(f"❌ SIGNAL REJETÉ: Pullback {pullback_quality:.0f}% < 70% requis")
+        if pullback_quality < 60:  # Qualité pullback minimale (60%)
+            safe_log(f"❌ SIGNAL REJETÉ: Pullback {pullback_quality:.0f}% < 60% requis")
             self.log_detailed_market_analysis(trend, strength, indicators, "PULLBACK_INSUFFISANT")
             return None
         
@@ -3106,7 +3106,7 @@ class M5PullbackBot:
         if (trend == "BULLISH" and 
             h1_trend == "BULLISH" and  # 🛡️ CONFIRMATION H1 OBLIGATOIRE
             current_price > ema_master and  # Prix > EMA 200 (tendance de fond haussière)
-            pullback_quality >= 70 and     # Prix proche de l'EMA 50 (pullback détecté)
+            pullback_quality >= 60 and     # Prix proche de l'EMA 50 (pullback détecté)
             current_rsi <= self.config['RSI_OVERBOUGHT']):  # RSI pas en surachat selon config
             
             # Cooldown M5 adaptatif avec logging amélioré
@@ -3143,7 +3143,7 @@ class M5PullbackBot:
         # Conditions: Tendance baissière + Confirmation H1 + Pullback détecté + RSI favorable
         elif (trend == "BEARISH" and 
               h1_trend == "BEARISH" and  # 🛡️ CONFIRMATION H1 OBLIGATOIRE
-              pullback_quality >= 70 and     # Pullback détecté (prix proche EMA50)
+              pullback_quality >= 60 and     # Pullback détecté (prix proche EMA50)
               current_rsi >= self.config['RSI_OVERSOLD'] and  # RSI > 30 (pas en survente extrême)
               current_rsi <= 65):            # RSI pas trop élevé (évite faux rebonds)
             
@@ -3181,7 +3181,7 @@ class M5PullbackBot:
         safe_log(f"🔍 ANALYSE COMPLÈTE:")
         safe_log(f"   📊 Tendance: {trend} {strength:.1f}% (≥80% requis)")
         safe_log(f"   📊 H1 Trend: {h1_trend if 'h1_trend' in locals() else 'Non vérifié'}")
-        safe_log(f"   📊 Pullback: {pullback_quality:.0f}% (≥70% requis)")
+        safe_log(f"   📊 Pullback: {pullback_quality:.0f}% (≥60% requis)")
         safe_log(f"   📊 RSI: {current_rsi:.1f} (zone optimale: 30-70)")
         safe_log(f"   📊 ATR: {current_atr:.3f} (plage: {OPTIMAL_ATR_MIN}-{OPTIMAL_ATR_MAX})")
         safe_log(f"   📊 Prix: {current_price:.2f} | EMA200: {ema_master:.2f} | EMA50: {ema_pullback:.2f}")
@@ -3192,8 +3192,8 @@ class M5PullbackBot:
                 safe_log(f"   ❌ H1 trend {h1_trend} ≠ BULLISH (conflit multi-timeframe)")
             if current_price <= ema_master:
                 safe_log(f"   ❌ Prix {current_price:.2f} <= EMA200 {ema_master:.2f}")
-            if pullback_quality < 70:
-                safe_log(f"   ❌ Pullback {pullback_quality:.0f}% < 70%")
+            if pullback_quality < 60:
+                safe_log(f"   ❌ Pullback {pullback_quality:.0f}% < 60%")
             if current_rsi > self.config['RSI_OVERBOUGHT']:
                 safe_log(f"   ❌ RSI {current_rsi:.1f} > {self.config['RSI_OVERBOUGHT']} (surachat)")
         
@@ -3201,8 +3201,8 @@ class M5PullbackBot:
             safe_log(f"🔍 CONDITIONS SELL NON REMPLIES:")
             if h1_trend != "BEARISH":
                 safe_log(f"   ❌ H1 trend {h1_trend} ≠ BEARISH (conflit multi-timeframe)")
-            if pullback_quality < 70:
-                safe_log(f"   ❌ Pullback {pullback_quality:.0f}% < 70%")
+            if pullback_quality < 60:
+                safe_log(f"   ❌ Pullback {pullback_quality:.0f}% < 60%")
             if current_rsi < self.config['RSI_OVERSOLD']:
                 safe_log(f"   ❌ RSI {current_rsi:.1f} < {self.config['RSI_OVERSOLD']} (trop bas)")
             if current_rsi > 65:
@@ -3443,6 +3443,17 @@ class M5PullbackBot:
                 f"Pullback:{pullback_quality:.0f}% | Pos:{open_positions_count} | "
                 f"{safety_status} | {daily_status}")
         
+        # 🔬 DIAGNOSTIC SYSTÉMATIQUE (même sans signal)
+        safe_log(f"🧪 DIAGNOSTIC M5: Force {strength:.1f}% | Pullback {pullback_quality:.0f}% | RSI {current_rsi:.1f} | ATR {current_atr:.3f}")
+        if strength < 80:
+            safe_log(f"   ❌ Force insuffisante: {strength:.1f}% < 80% requis")
+        if pullback_quality < 60:
+            safe_log(f"   ❌ Pullback faible: {pullback_quality:.0f}% < 60% requis")
+        if current_rsi < 30 or current_rsi > 70:
+            safe_log(f"   ⚡ RSI en zone: {current_rsi:.1f} (30-70 = neutre)")
+        if current_atr < 1.5 or current_atr > 7.0:
+            safe_log(f"   ⚠️ ATR hors zone optimale: {current_atr:.3f} (1.5-7.0 optimal)")
+        
         # Vérification signal PULLBACK (seulement si pas en mode sécurité)
         if not self.stats['balance_safety_active']:
             signal = self.should_open_position(trend, strength, indicators)
@@ -3458,6 +3469,24 @@ class M5PullbackBot:
                     safe_log(f"✅ Trade M5 exécuté avec succès!")
                 else:
                     safe_log(f"❌ Échec exécution trade M5")
+            else:
+                # 📝 RÉSUMÉ: Pourquoi aucun signal n'est généré
+                safe_log(f"💤 AUCUN SIGNAL M5 - Résumé des conditions:")
+                if strength < 80:
+                    safe_log(f"   🎯 Force {strength:.1f}% < 80% (condition principale non remplie)")
+                if pullback_quality < 60:
+                    safe_log(f"   📉 Pullback {pullback_quality:.0f}% < 60% (position pas assez proche EMA50)")
+                if current_rsi <= 30:
+                    safe_log(f"   📊 RSI {current_rsi:.1f} en survente (attente rebond)")
+                elif current_rsi >= 70:
+                    safe_log(f"   📊 RSI {current_rsi:.1f} en surachat (attente correction)")
+                if current_atr < 1.5:
+                    safe_log(f"   ⚡ ATR {current_atr:.3f} trop faible (marché peu volatil)")
+                elif current_atr > 7.0:
+                    safe_log(f"   ⚡ ATR {current_atr:.3f} trop élevé (marché trop volatil)")
+                if trend == "NEUTRAL":
+                    safe_log(f"   🎭 Tendance neutre (pas de direction claire)")
+                safe_log(f"   ⏳ Prochaine analyse dans 30 secondes...")
         else:
             # En mode sécurité, message périodique
             if hasattr(self, '_safety_message_count'):
