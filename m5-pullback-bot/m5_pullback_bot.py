@@ -120,6 +120,11 @@ RSI_SELL_MAX = 60              # RSI maximum pour SELL (rebond s'essoufle)
 # 🎯 PARAMÈTRES M5 PULLBACK (Qualité > Quantité)
 # COOLDOWN : 5 minutes entre les trades pour éviter le sur-trading
 
+# 🛡️ FILTRES DE CONFIRMATION PROFESSIONNELS (NOUVEAU)
+ENABLE_H1_CONFIRMATION = True      # Confirmation tendance H1 obligatoire
+OPTIMAL_ATR_MIN = 1.5              # Volatilité minimale pour trader (1.5 = 15 pips)
+OPTIMAL_ATR_MAX = 7.0              # Volatilité maximale (marché trop chaotique)
+
 # 🛡️ GESTION DU MODE DÉGRADÉ (NOUVEAU)
 DEGRADED_MODE_RISK_MULTIPLIER = 0.2  # Risque = 20% du risque normal (2.5% -> 0.5%)
 DEGRADED_MODE_RECOVERY_THRESHOLD = -2.0  # Seuil de sortie du mode dégradé (-2%)
@@ -1747,6 +1752,47 @@ class M5PullbackBot:
             safe_log(f"❌ Erreur fermeture position {ticket}: {e}")
             return False
     
+    def get_h1_trend_confirmation(self):
+        """🛡️ FILTRE PROFESSIONNEL: Confirme la tendance de fond sur H1 pour filtrer les signaux M5"""
+        try:
+            # Récupérer 50 bougies H1 pour calculer l'EMA 50
+            rates_h1 = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_H1, 0, 50)
+            if rates_h1 is None or len(rates_h1) < 50:
+                safe_log("⚠️ Données H1 insuffisantes pour confirmation")
+                return "NEUTRAL"  # En cas de doute, on s'abstient
+
+            close_h1 = [rate['close'] for rate in rates_h1]
+            ema50_h1 = self.calculate_ema(close_h1, 50)
+
+            current_price = close_h1[-1]
+            current_ema50_h1 = ema50_h1[-1]
+
+            # Calcul de la force de la tendance H1
+            price_distance_h1 = abs(current_price - current_ema50_h1) / current_price * 100
+            
+            if current_price > current_ema50_h1:
+                safe_log(f"📈 CONFIRMATION H1: Tendance HAUSSIÈRE (Prix > EMA50 H1, écart: +{price_distance_h1:.2f}%)")
+                return "BULLISH"
+            else:
+                safe_log(f"📉 CONFIRMATION H1: Tendance BAISSIÈRE (Prix < EMA50 H1, écart: -{price_distance_h1:.2f}%)")
+                return "BEARISH"
+
+        except Exception as e:
+            safe_log(f"❌ Erreur confirmation H1: {e}")
+            return "NEUTRAL"
+
+    def check_volatility_regime(self, current_atr):
+        """🛡️ FILTRE PROFESSIONNEL: Vérifie si les conditions de volatilité sont optimales"""
+        if current_atr < OPTIMAL_ATR_MIN:
+            safe_log(f"❌ VOLATILITÉ INSUFFISANTE: ATR {current_atr:.2f} < {OPTIMAL_ATR_MIN} (marché trop calme)")
+            return False
+        elif current_atr > OPTIMAL_ATR_MAX:
+            safe_log(f"❌ VOLATILITÉ EXCESSIVE: ATR {current_atr:.2f} > {OPTIMAL_ATR_MAX} (marché chaotique)")
+            return False
+        else:
+            safe_log(f"✅ VOLATILITÉ OPTIMALE: ATR {current_atr:.2f} dans la plage [{OPTIMAL_ATR_MIN}-{OPTIMAL_ATR_MAX}]")
+            return True
+
     def get_adaptive_trade_frequency(self, trend=None):
         """🎯 Retourne la fréquence adaptative selon la direction du marché détectée par detect_ultra_trend()"""
         # Si trend n'est pas fourni, on utilise la détection ultra trend pour cohérence
@@ -2772,6 +2818,22 @@ class M5PullbackBot:
         if pullback_quality < 70:  # Qualité pullback minimale (70%)
             return None
         
+        # 🛡️ FILTRES DE CONFIRMATION PROFESSIONNELS (NOUVEAU)
+        
+        # FILTRE 1: Confirmation tendance H1 (évite les trades contre-tendance)
+        if ENABLE_H1_CONFIRMATION:
+            h1_trend = self.get_h1_trend_confirmation()
+            if h1_trend == "NEUTRAL":
+                safe_log("❌ SIGNAL REJETÉ: Confirmation H1 impossible - Pas de trading en cas de doute")
+                return None
+        else:
+            h1_trend = trend  # Si désactivé, on accepte la tendance M5
+        
+        # FILTRE 2: Régime de volatilité optimal
+        if not self.check_volatility_regime(current_atr):
+            safe_log("❌ SIGNAL REJETÉ: Conditions de volatilité non optimales")
+            return None
+        
         # Calcul des cooldowns adaptatifs
         if time_since_last_buy is None:
             if self.last_buy_timestamp is None:
@@ -2791,8 +2853,9 @@ class M5PullbackBot:
             return None
         
         # 🟢 STRATÉGIE 1: ACHAT SUR PULLBACK HAUSSIER (BUY)
-        # Conditions: Tendance haussière + Prix proche EMA 50 + RSI sain
+        # Conditions: Tendance haussière + Confirmation H1 + Prix proche EMA 50 + RSI sain
         if (trend == "BULLISH" and 
+            h1_trend == "BULLISH" and  # 🛡️ CONFIRMATION H1 OBLIGATOIRE
             current_price > ema_master and  # Prix > EMA 200 (tendance de fond haussière)
             pullback_quality >= 70 and     # Prix proche de l'EMA 50 (pullback détecté)
             current_rsi <= self.config['RSI_OVERBOUGHT']):  # RSI pas en surachat selon config
@@ -2823,8 +2886,9 @@ class M5PullbackBot:
             }
 
         # 🔴 STRATÉGIE 2: VENTE SUR PULLBACK BAISSIER (SELL)
-        # Conditions: Tendance baissière + Pullback détecté + RSI favorable
+        # Conditions: Tendance baissière + Confirmation H1 + Pullback détecté + RSI favorable
         elif (trend == "BEARISH" and 
+              h1_trend == "BEARISH" and  # 🛡️ CONFIRMATION H1 OBLIGATOIRE
               pullback_quality >= 70 and     # Pullback détecté (prix proche EMA50)
               current_rsi >= self.config['RSI_OVERSOLD'] and  # RSI > 30 (pas en survente extrême)
               current_rsi <= 65):            # RSI pas trop élevé (évite faux rebonds)
@@ -2857,7 +2921,10 @@ class M5PullbackBot:
         # 🐛 DEBUG: Pourquoi pas de TRADE ? Loggons les conditions non remplies
         if trend == "BULLISH":
             safe_log(f"🔍 DEBUG BULLISH: Price={current_price:.2f}, EMA200={ema_master:.2f}, Pullback={pullback_quality:.0f}%, RSI={current_rsi:.1f}")
-            if current_price <= ema_master:
+            safe_log(f"   📊 H1 Trend: {h1_trend}, Volatilité ATR: {current_atr:.2f}")
+            if h1_trend != "BULLISH":
+                safe_log(f"   ❌ BUY bloqué: H1 trend {h1_trend} ≠ BULLISH (pas de confirmation H1)")
+            elif current_price <= ema_master:
                 safe_log(f"   ❌ BUY bloqué: Prix {current_price:.2f} <= EMA200 {ema_master:.2f}")
             elif pullback_quality < 70:
                 safe_log(f"   ❌ BUY bloqué: Pullback {pullback_quality:.0f}% < 70%")
@@ -2868,7 +2935,10 @@ class M5PullbackBot:
         
         elif trend == "BEARISH":
             safe_log(f"🔍 DEBUG BEARISH: Price={current_price:.2f}, EMA200={ema_master:.2f}, Pullback={pullback_quality:.0f}%, RSI={current_rsi:.1f}")
-            if pullback_quality < 70:
+            safe_log(f"   📊 H1 Trend: {h1_trend}, Volatilité ATR: {current_atr:.2f}")
+            if h1_trend != "BEARISH":
+                safe_log(f"   ❌ SELL bloqué: H1 trend {h1_trend} ≠ BEARISH (pas de confirmation H1)")
+            elif pullback_quality < 70:
                 safe_log(f"   ❌ SELL bloqué: Pullback {pullback_quality:.0f}% < 70%")
             elif current_rsi < self.config['RSI_OVERSOLD']:
                 safe_log(f"   ❌ SELL bloqué: RSI {current_rsi:.1f} < {self.config['RSI_OVERSOLD']} (trop bas)")
@@ -2881,8 +2951,8 @@ class M5PullbackBot:
             safe_log(f"🔍 DEBUG SIDEWAYS: Pas de tendance claire → Pas de trading")
             safe_log(f"   📊 Tendance: {trend} {strength:.1f}% (< 80%)")
             
-        # 📊 DEBUG GÉNÉRAL: Toujours afficher les seuils
-        safe_log(f"📋 SEUILS: Pullback≥70%, RSI=[{self.config['RSI_OVERSOLD']}-{self.config['RSI_OVERBOUGHT']}], Force≥80%")
+        # 📊 DEBUG GÉNÉRAL: Toujours afficher les seuils avec nouveaux filtres
+        safe_log(f"📋 SEUILS: Pullback≥70%, RSI=[{self.config['RSI_OVERSOLD']}-{self.config['RSI_OVERBOUGHT']}], Force≥80%, H1 confirmé, ATR optimal")
         
         # Aucune condition remplie
         return None
