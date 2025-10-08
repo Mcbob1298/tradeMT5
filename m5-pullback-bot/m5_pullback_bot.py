@@ -97,7 +97,7 @@ ANALYSIS_INTERVAL = 30          # 🕒 Analyse toutes les 30 secondes (haute fr�
 # 🚀 GESTION LOT ADAPTATIF OPTIMISÉ
 ADAPTIVE_LOT_RISK_PERCENT = 2.5 # Risque 2.5% par trade (optimisé vs 3.5% trop agressif)
 ADAPTIVE_LOT_MIN = 0.01         # Lot minimum (contrainte broker)
-ADAPTIVE_LOT_MAX = 1.0          # Lot maximum (sécurité anti-explosion)
+ADAPTIVE_LOT_MAX = 100.0        # Lot maximum (limite broker)
 
 # 🎯 NOUVEAUX PARAMÈTRES STRATÉGIE M5 PULLBACK
 TREND_EMA_MASTER = 200          # EMA 200 - Juge de paix pour tendance de fond
@@ -1232,6 +1232,18 @@ class M5PullbackBot:
                         # Note: Le filet de sécurité est maintenant basé sur la balance (-5%)
                     else:
                         safe_log(f"🔄 Position fermée: Ticket {position['ticket']} | P&L: {profit:+.2f}€ | Durée: {duration_str}")
+                    
+                    # 🔄 RESET COOLDOWN : Position fermée par TP/SL permet un nouveau trade immédiat
+                    if close_type in ['TP', 'SL']:
+                        # Reset du cooldown selon le type de position fermée
+                        if position['type'] == 'BUY':
+                            self.last_buy_timestamp = None
+                            safe_log(f"   🔄 Cooldown BUY remis à zéro - Nouveau trade BUY possible immédiatement!")
+                        elif position['type'] == 'SELL':
+                            self.last_sell_timestamp = None
+                            safe_log(f"   🔄 Cooldown SELL remis à zéro - Nouveau trade SELL possible immédiatement!")
+                        
+                        safe_log(f"   ⚡ Trade fermé par {close_type} → Possibilité de trade immédiat si conditions remplies")
                 else:
                     safe_log(f"⚠️ Position fermée (profit non détecté): Ticket {position['ticket']} | Durée: {duration_str}")
                 
@@ -3036,19 +3048,19 @@ class M5PullbackBot:
             
             current_equity = account_info.equity
             
-            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE
+            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE (RISQUES AUGMENTÉS)
             if trend_strength >= 95.0:
-                risk_percent = 6.0  # 🔥 YOLO MODE - Certitude absolue
+                risk_percent = 12.0  # 🔥 YOLO MODE - Certitude absolue (doublé)
                 risk_level = "MAXIMUM (YOLO)"
                 safe_log(f"🛡️ ATTENTION: SL YOLO sera plus large ({YOLO_SL_MULTIPLIER}x ATR au lieu de {ATR_SL_MULTIPLIER}x)")
             elif trend_strength >= 90.0:
-                risk_percent = 4.5  # 🚀 Risque élevé - Très forte certitude
+                risk_percent = 9.0  # 🚀 Risque élevé - Très forte certitude (doublé)
                 risk_level = "ÉLEVÉ"
             elif trend_strength >= 80.0:
-                risk_percent = 3.5  # ⚡ Risque augmenté - Forte certitude
+                risk_percent = 7.0  # ⚡ Risque augmenté - Forte certitude (doublé)
                 risk_level = "AUGMENTÉ"
             else:
-                risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
+                risk_percent = 5.0  # 📊 Risque standard - Certitude modérée (doublé)
                 risk_level = "STANDARD"
             
             # 🛡️ NOUVEAU : Application du mode dégradé (SAUF pour le mode YOLO)
@@ -3254,7 +3266,12 @@ class M5PullbackBot:
             safe_log(f"   📈 Tendance: {trend} {strength:.1f}%")
             safe_log(f"   📊 RSI: {current_rsi:.1f} (<= {self.config['RSI_OVERBOUGHT']})")
             safe_log(f"   🎯 Pullback: {pullback_quality:.0f}%")
-            safe_log(f"   ⏰ Cooldown: OK ({time_since_last_buy:.0f}s >= {cooldown}s)")
+            
+            # Message cooldown adaptatif selon la situation
+            if time_since_last_buy == float('inf'):
+                safe_log(f"   ⏰ Cooldown: Premier trade BUY ou cooldown resetté!")
+            else:
+                safe_log(f"   ⏰ Cooldown: OK ({time_since_last_buy:.0f}s >= {cooldown}s)")
             
             # Log succès détaillé
             self.log_detailed_market_analysis(trend, strength, indicators, "SIGNAL_BUY_VALIDÉ")
@@ -3295,7 +3312,12 @@ class M5PullbackBot:
             safe_log(f"   📈 Tendance: {trend} {strength:.1f}%")
             safe_log(f"   📊 RSI: {current_rsi:.1f} (30-65 optimal pour SELL)")
             safe_log(f"   🎯 Pullback: {pullback_quality:.0f}%")
-            safe_log(f"   ⏰ Cooldown: OK ({time_since_last_sell:.0f}s >= {sell_cooldown}s)")
+            
+            # Message cooldown adaptatif selon la situation
+            if time_since_last_sell == float('inf'):
+                safe_log(f"   ⏰ Cooldown: Premier trade SELL ou cooldown resetté!")
+            else:
+                safe_log(f"   ⏰ Cooldown: OK ({time_since_last_sell:.0f}s >= {sell_cooldown}s)")
             
             # Log succès détaillé
             self.log_detailed_market_analysis(trend, strength, indicators, "SIGNAL_SELL_VALIDÉ")
