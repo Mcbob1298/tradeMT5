@@ -1164,6 +1164,44 @@ class M5PullbackBot:
             # En cas d'erreur, on autorise le trade (plus sûr)
             return True
 
+    def check_trading_enabled(self):
+        """
+        🛡️ VÉRIFICATION STATUT TRADING MT5
+        ==================================
+        
+        Vérifie si le trading est autorisé sur le compte MT5.
+        Utile pour éviter les erreurs TRADE_DISABLED.
+        
+        Returns:
+            tuple: (bool: trading_enabled, str: status_message)
+        """
+        try:
+            # Vérification connexion MT5
+            if not mt5.terminal_info():
+                return False, "MT5 non connecté"
+            
+            # Vérification compte
+            account_info = mt5.account_info()
+            if not account_info:
+                return False, "Impossible de récupérer les infos compte"
+            
+            # Vérification autorisation de trading
+            if not account_info.trade_allowed:
+                return False, "Trading désactivé sur le compte MT5"
+            
+            # Vérification symbole
+            symbol_info = mt5.symbol_info(self.symbol)
+            if not symbol_info:
+                return False, f"Symbole {self.symbol} non disponible"
+            
+            if not symbol_info.trade_mode:
+                return False, f"Trading désactivé pour {self.symbol}"
+            
+            return True, "Trading autorisé"
+            
+        except Exception as e:
+            return False, f"Erreur vérification trading: {e}"
+
     def sync_positions_with_mt5(self):
         """Synchronise notre liste avec les positions réelles de MT5"""
         if not self.open_positions:
@@ -1389,42 +1427,18 @@ class M5PullbackBot:
                         # Bon momentum → 50% du profit sécurisé
                         sl_profit_ratio = 0.50
                         phase = "MOMENTUM (50% profit)"
-                    elif tp_progress_pct >= 50.0:
-                        # Progression solide → 25% du profit sécurisé
-                        sl_profit_ratio = 0.25
-                        phase = "PROGRESSION (25% profit)"
+                    elif tp_progress_pct >= 60.0:
+                        # Progression solide → 35% du profit sécurisé
+                        sl_profit_ratio = 0.35
+                        phase = "PROGRESSION (35% profit)"
                     else:
-                        # Premier niveau (30-50%) → MINIMUM 40 PIPS DE PROFIT GARANTIS
-                        # Au lieu de 10% du TP (qui peut être négatif), on garantit 40 pips minimum
-                        min_profit_pips = 40  # 40 pips minimum de profit garanti
-                        min_profit_distance = min_profit_pips * 0.1  # Conversion en distance prix
-                        
-                        # On prend le MAXIMUM entre 10% du TP et 40 pips garantis
-                        tp_10_percent = tp_distance * 0.10
-                        target_profit_distance = max(tp_10_percent, min_profit_distance)
-                        
-                        # Définir sl_profit_ratio pour le logging (ratio équivalent)
-                        sl_profit_ratio = target_profit_distance / tp_distance if tp_distance > 0 else 0.10
-                        
-                        phase = f"SÉCURISÉ (≥{min_profit_pips} pips profit GARANTI)"
-                        
-                        # Calcul direct du SL avec profit garanti
-                        new_sl_progressive = entry_price + target_profit_distance
-                    
-                    # Pour les autres phases (≥50%), calcul normal
-                    if tp_progress_pct >= 50.0:
-                        # Calcul du nouveau SL selon la phase
-                        target_profit_distance = tp_distance * sl_profit_ratio
-                        new_sl_progressive = entry_price + target_profit_distance
-                    
-                    # 🛡️ SÉCURITÉ ULTIME : Vérifier que le SL est TOUJOURS en profit
-                    min_guaranteed_profit = 30 * 0.1  # 30 pips minimum absolu
-                    absolute_minimum_sl = entry_price + min_guaranteed_profit
-                    
-                    if new_sl_progressive < absolute_minimum_sl:
-                        safe_log(f"   🛡️ SÉCURITÉ: SL ajusté de {new_sl_progressive:.5f} → {absolute_minimum_sl:.5f} (profit 30 pips minimum)")
-                        new_sl_progressive = absolute_minimum_sl
-                        phase += " → SÉCURISÉ 30 pips"
+                        # Premier niveau (30-50%) → 20% du profit sécurisé (simple)
+                        sl_profit_ratio = 0.20
+                        phase = "SÉCURISÉ (20% profit)"
+
+                    # Calcul du nouveau SL selon la phase
+                    target_profit_distance = tp_distance * sl_profit_ratio
+                    new_sl_progressive = entry_price + target_profit_distance
                     
                     # 🛡️ RÈGLE D'OR : Ne JAMAIS reculer le SL
                     current_sl = mt5_position.sl if mt5_position.sl > 0 else entry_price
@@ -1541,6 +1555,22 @@ class M5PullbackBot:
                             
                             error_desc = error_details.get(result.retcode, f"Code {result.retcode}")
                             
+                            # 🛡️ GESTION SPÉCIALE POUR TRADE_DISABLED
+                            if result.retcode == 10025 or result.retcode == mt5.TRADE_RETCODE_TRADE_DISABLED:
+                                # Pour TRADE_DISABLED, on log périodiquement (toutes les 10 tentatives)
+                                if not hasattr(self, '_trade_disabled_count'):
+                                    self._trade_disabled_count = 0
+                                self._trade_disabled_count += 1
+                                
+                                if self._trade_disabled_count % 10 == 1:  # Premier message puis tous les 10
+                                    safe_log(f"⚠️ TRADING DÉSACTIVÉ - Trailing stops en pause temporaire")
+                                    safe_log(f"   🔧 Vérifiez les paramètres MT5 (Outils → Options → Trading)")
+                                    safe_log(f"   📊 Position {ticket} surveillée, trailing reprendra quand autorisé")
+                                    safe_log(f"   🔄 Tentative {self._trade_disabled_count} (message affiché toutes les 10)")
+                                # On ne met PAS le ticket en failed pour permettre la reprise
+                                continue
+                            
+                            # Pour les autres erreurs, on log normalement
                             safe_log(f"❌ Échec trailing stop {ticket}: {error_desc}")
                             safe_log(f"   📝 Détail MT5: {error_msg}")
                             safe_log(f"   📊 SL tenté: {new_sl_progressive:.5f}")
@@ -1548,13 +1578,13 @@ class M5PullbackBot:
                             safe_log(f"   � Distance: {abs(new_sl_progressive - current_price_bid):.5f}")
                             safe_log(f"   📊 Min requis: {safety_buffer:.5f}")
                             
-                            # Erreurs critiques qui nécessitent d'arrêter les tentatives
+                            # Erreurs critiques qui nécessitent d'arrêter les tentatives (SAUF TRADE_DISABLED)
                             critical_errors = [
                                 mt5.TRADE_RETCODE_INVALID_STOPS,
                                 mt5.TRADE_RETCODE_INVALID_PRICE,
                                 mt5.TRADE_RETCODE_INVALID_ORDER,
-                                mt5.TRADE_RETCODE_TRADE_DISABLED,
-                                16, 10015, 10016  # Codes numériques directs
+                                # mt5.TRADE_RETCODE_TRADE_DISABLED,  # Retiré pour permettre la reprise
+                                16, 10015, 10016  # Codes numériques directs (sauf 10025 = TRADE_DISABLED)
                             ]
                             
                             if result.retcode in critical_errors:
@@ -1598,36 +1628,15 @@ class M5PullbackBot:
                         sl_profit_ratio = 0.25
                         phase = "PROGRESSION (25% profit)"
                     else:
-                        # Premier niveau (30-50%) → MINIMUM 40 PIPS DE PROFIT GARANTIS
-                        min_profit_pips = 40  # 40 pips minimum de profit garanti
-                        min_profit_distance = min_profit_pips * 0.1  # Conversion en distance prix
-                        
-                        # On prend le MAXIMUM entre 10% du TP et 40 pips garantis
-                        tp_10_percent = tp_distance * 0.10
-                        target_profit_distance = max(tp_10_percent, min_profit_distance)
-                        
-                        # Définir sl_profit_ratio pour le logging (ratio équivalent) - SELL
-                        sl_profit_ratio = target_profit_distance / tp_distance if tp_distance > 0 else 0.10
-                        
-                        phase = f"SÉCURISÉ (≥{min_profit_pips} pips profit GARANTI)"
-                        
-                        # Pour SELL : SL = entry_price - target_profit_distance
-                        new_sl_progressive = entry_price - target_profit_distance
+                        # Premier niveau (30-50%) → 10% du profit sécurisé (simple)
+                        sl_profit_ratio = 0.10
+                        phase = "SÉCURISÉ (10% profit)"
                     
-                    # Pour les autres phases (≥50%), calcul normal
-                    if tp_progress_pct >= 50.0:
-                        # Pour SELL : SL = entry_price - (tp_distance * ratio)
-                        target_profit_distance = tp_distance * sl_profit_ratio
-                        new_sl_progressive = entry_price - target_profit_distance
+                    # Pour SELL : Calcul du SL selon la phase
+                    target_profit_distance = tp_distance * sl_profit_ratio
+                    new_sl_progressive = entry_price - target_profit_distance
                     
-                    # 🛡️ SÉCURITÉ ULTIME SELL : Vérifier que le SL est TOUJOURS en profit
-                    min_guaranteed_profit = 30 * 0.1  # 30 pips minimum absolu
-                    absolute_maximum_sl = entry_price - min_guaranteed_profit  # Pour SELL, SL plus BAS
-                    
-                    if new_sl_progressive > absolute_maximum_sl:
-                        safe_log(f"   🛡️ SÉCURITÉ SELL: SL ajusté de {new_sl_progressive:.5f} → {absolute_maximum_sl:.5f} (profit 30 pips minimum)")
-                        new_sl_progressive = absolute_maximum_sl
-                        phase += " → SÉCURISÉ 30 pips"
+                    # Ne jamais reculer le SL (pour SELL, cela signifie ne jamais l'augmenter)
                     
                     # Ne jamais reculer le SL (pour SELL, cela signifie ne jamais l'augmenter)
                     current_sl = mt5_position.sl if mt5_position.sl > 0 else entry_price
@@ -1718,19 +1727,38 @@ class M5PullbackBot:
                                 10006: "REQUEST_REJECT - Requête rejetée", 
                                 10015: "INVALID_PRICE - Prix invalide",
                                 10016: "INVALID_STOPS - Distance stops insuffisante",
-                                10018: "MARKET_CLOSED - Marché fermé"
+                                10018: "MARKET_CLOSED - Marché fermé",
+                                10025: "TRADE_DISABLED - Trading désactivé"
                             }
                             
                             error_desc = error_details.get(result.retcode, f"Code {result.retcode}")
                             error_msg = getattr(result, 'comment', "Erreur inconnue")
                             
+                            # 🛡️ GESTION SPÉCIALE POUR TRADE_DISABLED (SELL)
+                            if result.retcode == 10025 or result.retcode == mt5.TRADE_RETCODE_TRADE_DISABLED:
+                                # Pour TRADE_DISABLED, on log périodiquement (toutes les 10 tentatives)
+                                if not hasattr(self, '_trade_disabled_count_sell'):
+                                    self._trade_disabled_count_sell = 0
+                                self._trade_disabled_count_sell += 1
+                                
+                                if self._trade_disabled_count_sell % 10 == 1:  # Premier message puis tous les 10
+                                    safe_log(f"⚠️ TRADING DÉSACTIVÉ - Trailing stops SELL en pause temporaire")
+                                    safe_log(f"   🔧 Vérifiez les paramètres MT5 (Outils → Options → Trading)")
+                                    safe_log(f"   📊 Position SELL {ticket} surveillée, trailing reprendra quand autorisé")
+                                    safe_log(f"   🔄 Tentative {self._trade_disabled_count_sell} (message affiché toutes les 10)")
+                                # On ne met PAS le ticket en failed pour permettre la reprise
+                                continue
+                            
+                            # Pour les autres erreurs, on log normalement
                             safe_log(f"❌ Échec trailing stop SELL {ticket}: {error_desc}")
                             safe_log(f"   📝 Détail MT5: {error_msg}")
                             safe_log(f"   📊 SL tenté: {new_sl_progressive:.5f}")
                             safe_log(f"   📊 Prix ASK: {current_price_ask:.5f}")
                             safe_log(f"   📊 Distance: {abs(new_sl_progressive - current_price_ask):.5f}")
                             
+                            # Erreurs critiques (SAUF TRADE_DISABLED)
                             if result.retcode in [mt5.TRADE_RETCODE_INVALID_STOPS, mt5.TRADE_RETCODE_INVALID_PRICE, 16, 10015, 10016]:
+                                safe_log(f"   🚨 Erreur critique SELL, arrêt trailing pour {ticket}")
                                 self._failed_trailing_tickets.add(ticket)
                     except Exception as e:
                         safe_log(f"❌ Exception trailing stop SELL {ticket}: {str(e)}")
@@ -3654,7 +3682,7 @@ class M5PullbackBot:
         safe_log(f"⚡ Stratégie: BUY UNIQUEMENT")
         safe_log(f"📉 BEARISH → BUY (sur rebond) toutes les 2min | 🟢 BULLISH → BUY (sur momentum) par minute")
         safe_log(f"⏰ Cooldown adaptatif: 5 minutes entre tous les trades")
-        safe_log(f"🎯 TP/SL: Adaptatifs selon ATR | Breakeven à +40 pips")
+        safe_log(f"🎯 TP/SL: Adaptatifs selon ATR | Breakeven progressif")
         safe_log(f"⏱️ Durée: {duration_minutes} minutes")
         safe_log(f"🔄 Analyse: toutes les {ANALYSIS_INTERVAL} secondes")
         safe_log("")
@@ -3714,7 +3742,7 @@ class M5PullbackBot:
         safe_log("="*60)
         safe_log(f"♾️ Session sans limite de temps")
         safe_log(f"⚡ Analyse toutes les {ANALYSIS_INTERVAL} secondes (haute fréquence)")
-        safe_log(f"🎯 TP/SL: Adaptatifs selon ATR | Breakeven à +40 pips")
+        safe_log(f"🎯 TP/SL: Adaptatifs selon ATR | Breakeven progressif")
         safe_log(f"⏹️ Arrêt: Ctrl+C")
         
         self.is_trading = True
@@ -3974,7 +4002,7 @@ class M5PullbackBot:
         
         safe_log(f"\n   📈 AMÉLIORATION STRATÉGIE:")
         safe_log(f"      • Conditions d'entrée: Affiner signaux RSI")
-        safe_log(f"      • Breakeven: Optimiser seuil (+40 pips)")
+        safe_log(f"      • Breakeven: Système progressif optimisé")
         safe_log(f"      • Sortie: Améliorer détection de retournement")
 
     def shutdown(self):
