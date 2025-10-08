@@ -107,7 +107,7 @@ RSI_PERIOD = 14                 # RSI standard (14 périodes)
 
 # 🎯 STRATÉGIE RÉVISÉE : TP PETITS + SL GRANDS + LOTS ÉLEVÉS
 ATR_PULLBACK_MULTIPLIER = 3.0   # Distance max à l'EMA 50 (3.0x ATR - zone pullback plus proche)
-ATR_SL_MULTIPLIER = 2.5         # 🔥 SL plus grand à 2.5x ATR (plus de respiration)
+ATR_SL_MULTIPLIER = 3.5         # 🔥 SL plus grand à 3.5x ATR (plus de respiration)
 TP_MAX_POINTS = 200             # 🎯 TP maximum : 200 points (20 pips) - PLAFONNÉ
 RISK_MULTIPLIER = 1.5           # 💰 Multiplicateur de risque augmenté (lots plus élevés)
 
@@ -135,7 +135,7 @@ YOLO_MIN_STRENGTH = 98.0              # 98% au lieu de 95% (plus strict)
 YOLO_MIN_EMA_SPREAD = 0.05            # Écart minimum EMAs (0.05% minimum - réduit pour plus de flexibilité) 
 YOLO_MAX_RSI_OVERBOUGHT = 75          # RSI pas trop extrême
 YOLO_MIN_RSI_OVERSOLD = 25            # RSI pas trop extrême
-YOLO_SL_MULTIPLIER = 3.5              # SL plus large (3.5x ATR au lieu de 2.5x)
+YOLO_SL_MULTIPLIER = 6.0              # SL beaucoup plus large (6.0x ATR pour YOLO)
 YOLO_MIN_ATR = 1.5                    # ATR minimum pour éviter marché trop calme
 YOLO_MAX_ATR = 8.0                    # ATR maximum pour éviter marché chaotique
 CONFIRMATION_DELAY_SECONDS = 180      # 3 minutes d'attente pour confirmation
@@ -422,11 +422,11 @@ class M5PullbackBot:
             if equity < 2000:
                 max_positions_final = 2  # Faibles moyens = prudence
             elif equity < 5000:
-                max_positions_final = 4  # Moyens moyens = croissance
+                max_positions_final = 3  # Moyens moyens = croissance modérée (réduit)
             elif equity < 10000:
-                max_positions_final = 6  # Bons moyens = expansion
+                max_positions_final = 3  # Bons moyens = expansion contrôlée (réduit)
             else:
-                max_positions_final = 8  # Forts moyens = diversification
+                max_positions_final = 3  # Forts moyens = max 3 positions (avec risque 6% max)
             
             # �️ CALCUL INFORMATIF SEULEMENT
             risque_acceptable = equity * 0.025  # 2.5% de l'equity par position
@@ -871,10 +871,48 @@ class M5PullbackBot:
             safe_log(f"❌ Erreur calcul profit temps réel: {e}")
             return 0
     
+    def has_yolo_position(self):
+        """
+        🔥 VÉRIFICATION POSITION YOLO ACTIVE
+        ===================================
+        
+        Vérifie s'il y a actuellement une position YOLO ouverte.
+        En mode YOLO, une seule position est autorisée à la fois.
+        
+        Returns:
+            bool: True si une position YOLO est active, False sinon
+        """
+        try:
+            for position in self.open_positions:
+                # Vérifie si la position a été ouverte avec un risque YOLO (12%)
+                # On peut identifier une position YOLO par sa taille de lot importante
+                position_data = position.get('position_data', {})
+                risk_level = position_data.get('risk_level', '')
+                if risk_level == 'MAXIMUM (YOLO)':
+                    safe_log(f"🔥 POSITION YOLO DÉTECTÉE - Blocage des nouveaux trades")
+                    return True
+            return False
+        except Exception as e:
+            safe_log(f"❌ Erreur vérification position YOLO: {e}")
+            return False
+    
     def place_real_order(self, trade_type, entry_price, tp_price, sl_price, signal):
         """Place un ordre RÉEL avec de l'argent RÉEL sur MT5"""
         try:
-            # 🚨 VÉRIFICATION MODE ARGENT RÉEL
+            # � VÉRIFICATION YOLO EN PREMIER
+            trend_strength = signal.get('strength', 50)
+            if trend_strength >= 95.0:
+                # Mode YOLO détecté - vérifier s'il y a déjà une position YOLO
+                if self.has_yolo_position():
+                    safe_log(f"🔥 ORDRE YOLO REFUSÉ - Position YOLO déjà active")
+                    return False
+                safe_log(f"🔥 ORDRE YOLO AUTORISÉ - Risque 12%, SL 6x ATR")
+            elif self.has_yolo_position():
+                # Position YOLO active, bloquer tous les autres ordres
+                safe_log(f"🚫 ORDRE REFUSÉ - Position YOLO active, attente fermeture")
+                return False
+            
+            # �🚨 VÉRIFICATION MODE ARGENT RÉEL
             if self.simulation_mode:
                 safe_log("🚫 ERREUR: Mode simulation détecté mais fonction argent réel appelée!")
                 return False
@@ -1011,7 +1049,10 @@ class M5PullbackBot:
             safe_log(f"   💸 Prix: {result.price}")
             safe_log(f"   🎯 TP: {tp_price}")
             
-            # Enregistrement de la position pour suivi temporel
+            # Enregistrement de la position pour suivi temporel avec infos de risque
+            trend_strength = signal.get('strength', 50)
+            risk_level = "MAXIMUM (YOLO)" if trend_strength >= 95.0 else "STANDARD"
+            
             position_info = {
                 'ticket': result.order,
                 'open_time': datetime.now(),
@@ -1019,7 +1060,12 @@ class M5PullbackBot:
                 'volume': result.volume,
                 'open_price': price,  # Utilise le prix de la requête, pas result.price qui peut être 0.0
                 'tp': tp_price,  # ✅ UTILISE LE TP ADAPTATIF PASSÉ EN ARGUMENT
-                'sl': sl_price
+                'sl': sl_price,
+                'position_data': {
+                    'risk_level': risk_level,
+                    'trend_strength': trend_strength,
+                    'signal': signal
+                }
             }
             self.open_positions.append(position_info)
             
@@ -3048,19 +3094,19 @@ class M5PullbackBot:
             
             current_equity = account_info.equity
             
-            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE (RISQUES AUGMENTÉS)
+            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE (YOLO RESTAURÉ)
             if trend_strength >= 95.0:
-                risk_percent = 12.0  # 🔥 YOLO MODE - Certitude absolue (doublé)
+                risk_percent = 12.0  # 🔥 YOLO MODE - Certitude absolue (restauré à 12%)
                 risk_level = "MAXIMUM (YOLO)"
                 safe_log(f"🛡️ ATTENTION: SL YOLO sera plus large ({YOLO_SL_MULTIPLIER}x ATR au lieu de {ATR_SL_MULTIPLIER}x)")
             elif trend_strength >= 90.0:
-                risk_percent = 9.0  # 🚀 Risque élevé - Très forte certitude (doublé)
+                risk_percent = 4.5  # 🚀 Risque élevé - Très forte certitude (réduit de moitié)
                 risk_level = "ÉLEVÉ"
             elif trend_strength >= 80.0:
-                risk_percent = 7.0  # ⚡ Risque augmenté - Forte certitude (doublé)
+                risk_percent = 3.5  # ⚡ Risque augmenté - Forte certitude (réduit de moitié)
                 risk_level = "AUGMENTÉ"
             else:
-                risk_percent = 5.0  # 📊 Risque standard - Certitude modérée (doublé)
+                risk_percent = 2.5  # 📊 Risque standard - Certitude modérée (réduit de moitié)
                 risk_level = "STANDARD"
             
             # 🛡️ NOUVEAU : Application du mode dégradé (SAUF pour le mode YOLO)
