@@ -35,7 +35,7 @@ def main():
     
     try:
         # Création et lancement du bot
-        bot = M5PullbackBot(config_name='YOLO')
+        bot = M5PullbackBot(config_name='BALANCED')
         
         print("Appuyez sur Ctrl+C pour arreter le bot")
         print("-" * 50)

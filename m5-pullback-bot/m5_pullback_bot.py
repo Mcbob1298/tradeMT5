@@ -107,7 +107,7 @@ RSI_PERIOD = 14                 # RSI standard (14 périodes)
 
 # 🎯 STRATÉGIE RÉVISÉE : TP PETITS + SL GRANDS + LOTS ÉLEVÉS
 ATR_PULLBACK_MULTIPLIER = 3.0   # Distance max à l'EMA 50 (3.0x ATR - zone pullback plus proche)
-ATR_SL_MULTIPLIER = 3.5         # 🔥 SL plus grand à 3.5x ATR (plus de respiration)
+ATR_SL_MULTIPLIER = 2.5         # 🔥 SL plus grand à 2.5x ATR (plus de respiration)
 TP_MAX_POINTS = 200             # 🎯 TP maximum : 200 points (20 pips) - PLAFONNÉ
 RISK_MULTIPLIER = 1.5           # 💰 Multiplicateur de risque augmenté (lots plus élevés)
 
@@ -130,14 +130,7 @@ DEGRADED_MODE_RISK_MULTIPLIER = 0.2  # Risque = 20% du risque normal (2.5% -> 0.
 DEGRADED_MODE_RECOVERY_THRESHOLD = -2.0  # Seuil de sortie du mode dégradé (-2%)
 DEGRADED_MODE_MAX_RR_RATIO = 1.0  # Ratio R/R plafonné à 1:1 en mode dégradé
 
-# 🛡️ VALIDATION ULTRA-STRICT POUR SIGNAUX YOLO (NOUVEAU)
-YOLO_MIN_STRENGTH = 98.0              # 98% au lieu de 95% (plus strict)
-YOLO_MIN_EMA_SPREAD = 0.05            # Écart minimum EMAs (0.05% minimum - réduit pour plus de flexibilité) 
-YOLO_MAX_RSI_OVERBOUGHT = 75          # RSI pas trop extrême
-YOLO_MIN_RSI_OVERSOLD = 25            # RSI pas trop extrême
-YOLO_SL_MULTIPLIER = 6.0              # SL beaucoup plus large (6.0x ATR pour YOLO)
-YOLO_MIN_ATR = 1.5                    # ATR minimum pour éviter marché trop calme
-YOLO_MAX_ATR = 8.0                    # ATR maximum pour éviter marché chaotique
+
 CONFIRMATION_DELAY_SECONDS = 180      # 3 minutes d'attente pour confirmation
 SIGNAL_PERSISTENCE_CHECKS = 3         # Signal doit persister 3 vérifications
 
@@ -159,7 +152,7 @@ class M5PullbackBot:
     Ratio risque/rendement optimal 1:2 avec gestion professionnelle du risque
     """
     
-    def __init__(self, config_name='YOLO', manual_daily_profit=None):
+    def __init__(self, config_name='BALANCED', manual_daily_profit=None):
         self.symbol = SYMBOL
         self.timeframe = TIMEFRAME
         self.is_trading = False
@@ -179,14 +172,13 @@ class M5PullbackBot:
             safe_log(f"   🛡️ Stop Loss obligatoire sur toutes les positions")
         
         # Chargement de la configuration
-        from m5_pullback_config import YOLO_CONFIG, AGGRESSIVE_CONFIG, BALANCED_CONFIG, CONSERVATIVE_CONFIG
+        from m5_pullback_config import AGGRESSIVE_CONFIG, BALANCED_CONFIG, CONSERVATIVE_CONFIG
         configs = {
-            'YOLO': YOLO_CONFIG,
             'AGGRESSIVE': AGGRESSIVE_CONFIG, 
             'BALANCED': BALANCED_CONFIG,
             'CONSERVATIVE': CONSERVATIVE_CONFIG
         }
-        self.config = configs.get(config_name, YOLO_CONFIG)
+        self.config = configs.get(config_name, BALANCED_CONFIG)
         safe_log(f"🎮 Configuration: {config_name}")
         safe_log(f"📊 RSI SELL > {self.config['RSI_OVERBOUGHT']}")
         safe_log(f"📊 RSI BUY < {self.config['RSI_OVERSOLD']}")
@@ -232,10 +224,9 @@ class M5PullbackBot:
         # Variables système profit quotidien adaptatif
         self.daily_start_balance = 0  # Balance de départ du jour
         
-        # �️ SYSTÈME DE VALIDATION ULTRA-STRICT YOLO
-        self.yolo_validation_history = []  # Historique des validations YOLO
-        self.pending_yolo_signals = {}     # Signaux YOLO en attente de confirmation
-        self.yolo_performance_tracker = []  # Suivi performances des trades YOLO
+
+
+
         
         # �🕐 HORAIRES DE TRADING - Arrêt du trading à 22h00, reprise à 00h20
         self.daily_close_time = 22.0   # Heure d'arrêt du trading (22h00) - PLUS DE FERMETURE FORCÉE
@@ -549,15 +540,13 @@ class M5PullbackBot:
             # 🎯 APPLICATION DU PLAFOND ADAPTATIF
             final_tp_distance = min(theoretical_tp, max_tp_distance)
             
-            # 🛡️ NOUVEAU : Plafonnement du TP en mode dégradé (sauf YOLO)
+            # 🛡️ PLAFONNEMENT DU TP EN MODE DÉGRADÉ
             if self.stats.get('balance_safety_active', False):
-                # Exception: Mode YOLO conservé même en mode dégradé
-                if trend_strength < 95.0:
-                    # Plafonner le TP au niveau du SL (ratio 1:1)
-                    max_tp_distance_degraded = sl_distance * DEGRADED_MODE_MAX_RR_RATIO
-                    if final_tp_distance > max_tp_distance_degraded:
-                        final_tp_distance = max_tp_distance_degraded
-                        safe_log(f"🛡️ MODE DÉGRADÉ - TP plafonné à {DEGRADED_MODE_MAX_RR_RATIO}:1 (distance: {final_tp_distance:.5f})")
+                # Plafonner le TP au niveau du SL (ratio 1:1)
+                max_tp_distance_degraded = sl_distance * DEGRADED_MODE_MAX_RR_RATIO
+                if final_tp_distance > max_tp_distance_degraded:
+                    final_tp_distance = max_tp_distance_degraded
+                    safe_log(f"🛡️ MODE DÉGRADÉ - TP plafonné à {DEGRADED_MODE_MAX_RR_RATIO}:1 (distance: {final_tp_distance:.5f})")
             
             # Calcul du ratio réel
             actual_ratio = final_tp_distance / sl_distance
@@ -871,46 +860,10 @@ class M5PullbackBot:
             safe_log(f"❌ Erreur calcul profit temps réel: {e}")
             return 0
     
-    def has_yolo_position(self):
-        """
-        🔥 VÉRIFICATION POSITION YOLO ACTIVE
-        ===================================
-        
-        Vérifie s'il y a actuellement une position YOLO ouverte.
-        En mode YOLO, une seule position est autorisée à la fois.
-        
-        Returns:
-            bool: True si une position YOLO est active, False sinon
-        """
-        try:
-            for position in self.open_positions:
-                # Vérifie si la position a été ouverte avec un risque YOLO (12%)
-                # On peut identifier une position YOLO par sa taille de lot importante
-                position_data = position.get('position_data', {})
-                risk_level = position_data.get('risk_level', '')
-                if risk_level == 'MAXIMUM (YOLO)':
-                    safe_log(f"🔥 POSITION YOLO DÉTECTÉE - Blocage des nouveaux trades")
-                    return True
-            return False
-        except Exception as e:
-            safe_log(f"❌ Erreur vérification position YOLO: {e}")
-            return False
-    
     def place_real_order(self, trade_type, entry_price, tp_price, sl_price, signal):
         """Place un ordre RÉEL avec de l'argent RÉEL sur MT5"""
         try:
-            # � VÉRIFICATION YOLO EN PREMIER
-            trend_strength = signal.get('strength', 50)
-            if trend_strength >= 95.0:
-                # Mode YOLO détecté - vérifier s'il y a déjà une position YOLO
-                if self.has_yolo_position():
-                    safe_log(f"🔥 ORDRE YOLO REFUSÉ - Position YOLO déjà active")
-                    return False
-                safe_log(f"🔥 ORDRE YOLO AUTORISÉ - Risque 12%, SL 6x ATR")
-            elif self.has_yolo_position():
-                # Position YOLO active, bloquer tous les autres ordres
-                safe_log(f"🚫 ORDRE REFUSÉ - Position YOLO active, attente fermeture")
-                return False
+
             
             # �🚨 VÉRIFICATION MODE ARGENT RÉEL
             if self.simulation_mode:
@@ -1049,10 +1002,7 @@ class M5PullbackBot:
             safe_log(f"   💸 Prix: {result.price}")
             safe_log(f"   🎯 TP: {tp_price}")
             
-            # Enregistrement de la position pour suivi temporel avec infos de risque
-            trend_strength = signal.get('strength', 50)
-            risk_level = "MAXIMUM (YOLO)" if trend_strength >= 95.0 else "STANDARD"
-            
+            # Enregistrement de la position pour suivi temporel
             position_info = {
                 'ticket': result.order,
                 'open_time': datetime.now(),
@@ -1060,12 +1010,7 @@ class M5PullbackBot:
                 'volume': result.volume,
                 'open_price': price,  # Utilise le prix de la requête, pas result.price qui peut être 0.0
                 'tp': tp_price,  # ✅ UTILISE LE TP ADAPTATIF PASSÉ EN ARGUMENT
-                'sl': sl_price,
-                'position_data': {
-                    'risk_level': risk_level,
-                    'trend_strength': trend_strength,
-                    'signal': signal
-                }
+                'sl': sl_price
             }
             self.open_positions.append(position_info)
             
@@ -1279,15 +1224,7 @@ class M5PullbackBot:
                     else:
                         safe_log(f"🔄 Position fermée: Ticket {position['ticket']} | P&L: {profit:+.2f}€ | Durée: {duration_str}")
                     
-                    # 🔄 RESET COOLDOWN : Position fermée par TP/SL permet un nouveau trade immédiat
-                    if close_type in ['TP', 'SL']:
-                        # Reset du cooldown selon le type de position fermée
-                        if position['type'] == 'BUY':
-                            self.last_buy_timestamp = None
-                            safe_log(f"   🔄 Cooldown BUY remis à zéro - Nouveau trade BUY possible immédiatement!")
-                        elif position['type'] == 'SELL':
-                            self.last_sell_timestamp = None
-                            safe_log(f"   🔄 Cooldown SELL remis à zéro - Nouveau trade SELL possible immédiatement!")
+                    # Position fermée - pas de reset automatique du cooldown
                         
                         safe_log(f"   ⚡ Trade fermé par {close_type} → Possibilité de trade immédiat si conditions remplies")
                 else:
@@ -2788,123 +2725,6 @@ class M5PullbackBot:
             
         return False
     
-    def validate_ultra_strict_yolo_signal(self, m5_data, trend_strength, signal_data):
-        """
-        🛡️ VALIDATION ULTRA-STRICT POUR SIGNAUX YOLO
-        ============================================
-        
-        Système multi-niveaux pour éliminer les faux signaux 100% :
-        1. Seuils rehaussés (98% au lieu de 95%)
-        2. Validation multi-timeframes (M1 + M15)
-        3. Conditions de marché optimales (ATR, RSI)
-        4. Délai de confirmation anti-faux signal
-        5. Historique de performance
-        
-        Returns:
-            bool: True si le signal YOLO est ultra-validé
-        """
-        try:
-            # 🔍 ÉTAPE 1 : Seuil M5 rehaussé à 98%
-            if trend_strength < YOLO_MIN_STRENGTH:
-                safe_log(f"🛡️ YOLO REJETÉ - Force insuffisante: {trend_strength:.1f}% < {YOLO_MIN_STRENGTH}%")
-                return False
-            
-            # 🔍 ÉTAPE 2 : Validation conditions de marché optimales
-            current_atr = signal_data.get('atr', 0)
-            current_rsi = signal_data.get('rsi', 50)
-            ema_spread = signal_data.get('ema_spread_pct', 0)
-            
-            # ATR dans plage acceptable (ni trop calme, ni trop volatil)
-            if current_atr < YOLO_MIN_ATR or current_atr > YOLO_MAX_ATR:
-                safe_log(f"🛡️ YOLO REJETÉ - ATR hors plage: {current_atr:.2f} (plage: {YOLO_MIN_ATR}-{YOLO_MAX_ATR})")
-                return False
-            
-            # RSI pas trop extrême
-            if current_rsi > YOLO_MAX_RSI_OVERBOUGHT or current_rsi < YOLO_MIN_RSI_OVERSOLD:
-                safe_log(f"🛡️ YOLO REJETÉ - RSI extrême: {current_rsi:.1f} (plage: {YOLO_MIN_RSI_OVERSOLD}-{YOLO_MAX_RSI_OVERBOUGHT})")
-                return False
-            
-            # Écart EMA suffisant pour tendance claire
-            if ema_spread < YOLO_MIN_EMA_SPREAD:
-                safe_log(f"🛡️ YOLO REJETÉ - Écart EMA insuffisant: {ema_spread:.3f}% < {YOLO_MIN_EMA_SPREAD}%")
-                return False
-            
-            # 🔍 ÉTAPE 3 : Délai de confirmation (persistance du signal)
-            signal_key = f"{trend_strength:.1f}_{current_atr:.2f}_{current_rsi:.1f}"
-            current_time = datetime.now()
-            
-            if signal_key not in self.pending_yolo_signals:
-                # Premier détection du signal - initialiser le délai
-                self.pending_yolo_signals[signal_key] = {
-                    'first_detection': current_time,
-                    'confirmations': 1,
-                    'last_check': current_time
-                }
-                safe_log(f"🛡️ YOLO EN ATTENTE - Début période de confirmation (180s)")
-                return False
-            else:
-                # Signal déjà détecté - vérifier persistance
-                pending_signal = self.pending_yolo_signals[signal_key]
-                time_elapsed = (current_time - pending_signal['first_detection']).total_seconds()
-                
-                if time_elapsed < CONFIRMATION_DELAY_SECONDS:
-                    pending_signal['confirmations'] += 1
-                    pending_signal['last_check'] = current_time
-                    remaining = CONFIRMATION_DELAY_SECONDS - time_elapsed
-                    safe_log(f"🛡️ YOLO EN ATTENTE - Confirmation {pending_signal['confirmations']}/{SIGNAL_PERSISTENCE_CHECKS} ({remaining:.0f}s restantes)")
-                    return False
-                
-                # Délai écoulé - vérifier si assez de confirmations
-                if pending_signal['confirmations'] >= SIGNAL_PERSISTENCE_CHECKS:
-                    # Signal validé ! Nettoyer et accepter
-                    del self.pending_yolo_signals[signal_key]
-                    
-                    # 🔍 ÉTAPE 4 : Vérification historique (optionnelle)
-                    yolo_success_rate = self.calculate_yolo_success_rate()
-                    
-                    safe_log(f"🚀 YOLO ULTRA-VALIDÉ !")
-                    safe_log(f"   ✅ Force: {trend_strength:.1f}% (seuil: {YOLO_MIN_STRENGTH}%)")
-                    safe_log(f"   ✅ ATR optimal: {current_atr:.2f} (plage: {YOLO_MIN_ATR}-{YOLO_MAX_ATR})")
-                    safe_log(f"   ✅ RSI équilibré: {current_rsi:.1f}")
-                    safe_log(f"   ✅ EMA écart: {ema_spread:.3f}%")
-                    safe_log(f"   ✅ Confirmations: {pending_signal['confirmations']}/{SIGNAL_PERSISTENCE_CHECKS}")
-                    safe_log(f"   📊 Taux réussite YOLO historique: {yolo_success_rate:.1f}%")
-                    
-                    return True
-                else:
-                    # Pas assez de confirmations - rejeter
-                    del self.pending_yolo_signals[signal_key]
-                    safe_log(f"🛡️ YOLO REJETÉ - Confirmations insuffisantes: {pending_signal['confirmations']}/{SIGNAL_PERSISTENCE_CHECKS}")
-                    return False
-            
-        except Exception as e:
-            safe_log(f"❌ Erreur validation ultra-strict YOLO: {e}")
-            return False
-    
-    def calculate_yolo_success_rate(self):
-        """Calcule le taux de réussite des trades YOLO historiques"""
-        if not self.yolo_performance_tracker:
-            return 100.0  # Pas d'historique = optimisme
-        
-        successful_trades = sum(1 for trade in self.yolo_performance_tracker if trade['profit'] > 0)
-        total_trades = len(self.yolo_performance_tracker)
-        
-        return (successful_trades / total_trades) * 100 if total_trades > 0 else 100.0
-    
-    def track_yolo_performance(self, profit, signal_data):
-        """Enregistre la performance d'un trade YOLO pour suivi"""
-        self.yolo_performance_tracker.append({
-            'timestamp': datetime.now(),
-            'profit': profit,
-            'signal_strength': signal_data.get('strength', 0),
-            'atr': signal_data.get('atr', 0),
-            'rsi': signal_data.get('rsi', 50)
-        })
-        
-        # Garder seulement les 20 derniers
-        if len(self.yolo_performance_tracker) > 20:
-            self.yolo_performance_tracker.pop(0)
-
     def detect_ultra_trend(self, data):
         """🎯 NOUVELLE DÉTECTION M5 PULLBACK : EMA 200/50 + RSI + ATR"""
         # Vérification taille minimale des données pour tous les indicateurs
@@ -3075,8 +2895,8 @@ class M5PullbackBot:
         NOUVELLE STRATÉGIE INTELLIGENTE :
         - Force 80-89% : Risque standard 2.5%
         - Force 90-94% : Risque augmenté 3.5% 
-        - Force 95-97% : Risque élevé 4.5%
-        - Force 98-100% : Risque maximum 6.0% (YOLO sur certitude absolue)
+        - Force 95-99% : Risque élevé 6%
+        - Force 100% : Risque maximum 12% (certitude absolue)
         
         Args:
             atr_sl_distance: Distance du Stop Loss basée sur l'ATR
@@ -3094,30 +2914,28 @@ class M5PullbackBot:
             
             current_equity = account_info.equity
             
-            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE (YOLO RESTAURÉ)
-            if trend_strength >= 95.0:
-                risk_percent = 12.0  # 🔥 YOLO MODE - Certitude absolue (restauré à 12%)
-                risk_level = "MAXIMUM (YOLO)"
-                safe_log(f"🛡️ ATTENTION: SL YOLO sera plus large ({YOLO_SL_MULTIPLIER}x ATR au lieu de {ATR_SL_MULTIPLIER}x)")
-            elif trend_strength >= 90.0:
-                risk_percent = 4.5  # 🚀 Risque élevé - Très forte certitude (réduit de moitié)
+            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE
+            if trend_strength >= 100:
+                risk_percent = 12  # 🚀 Risque maximum - Certitude absolue
+                risk_level = "MAXIMUM"
+            elif trend_strength >= 95.0:
+                risk_percent = 6  # 🎯 Risque élevé - Très forte certitude
                 risk_level = "ÉLEVÉ"
-            elif trend_strength >= 80.0:
-                risk_percent = 3.5  # ⚡ Risque augmenté - Forte certitude (réduit de moitié)
+            elif trend_strength >= 90.0:
+                risk_percent = 3.5  # ⚡ Risque augmenté - Forte certitude
                 risk_level = "AUGMENTÉ"
+            elif trend_strength >= 80.0:
+                risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
+                risk_level = "STANDARD"
             else:
-                risk_percent = 2.5  # 📊 Risque standard - Certitude modérée (réduit de moitié)
+                risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
                 risk_level = "STANDARD"
             
-            # 🛡️ NOUVEAU : Application du mode dégradé (SAUF pour le mode YOLO)
+            # 🛡️ APPLICATION DU MODE DÉGRADÉ
             if self.stats.get('balance_safety_active', False):
-                # Exception: Mode YOLO conservé même en mode dégradé
-                if trend_strength >= 95.0:
-                    safe_log(f"🚀 EXCEPTION MODE DÉGRADÉ: YOLO conservé (certitude {trend_strength:.1f}%)")
-                else:
-                    # Réduction drastique du risque pour tous les autres cas
-                    risk_percent *= DEGRADED_MODE_RISK_MULTIPLIER
-                    safe_log(f"🛡️ MODE DÉGRADÉ - Risque réduit à {risk_percent:.2f}%")
+                # Réduction drastique du risque pour tous les cas
+                risk_percent *= DEGRADED_MODE_RISK_MULTIPLIER
+                safe_log(f"🛡️ MODE DÉGRADÉ - Risque réduit à {risk_percent:.2f}%")
             
             # � CALCUL DU LOT BASÉ SUR LA FORCE DE TENDANCE
             risk_amount = current_equity * (risk_percent / 100)
@@ -3418,51 +3236,17 @@ class M5PullbackBot:
         
         # Aucune condition remplie
         return None
-        
-        # � STRATÉGIE 1: 
-
-
-
-
-
-        # � STRATÉGIE 2: 
-
-
-
-
-
-
-
-
-
-
-
-
-
     
     def execute_m5_trade(self, signal):
-        """🎯 NOUVELLE EXÉCUTION M5 : TP/SL adaptatifs basés sur l'ATR avec validation YOLO ultra-strict"""
+        """🎯 NOUVELLE EXÉCUTION M5 : TP/SL adaptatifs basés sur l'ATR avec validation ultra-stricte"""
         
         trade_type = signal['type']
         atr_value = signal['atr']
         current_price = signal.get('price', None)
         trend_strength = signal.get('strength', 50)
         
-        # 🛡️ VALIDATION ULTRA-STRICT POUR SIGNAUX YOLO
-        if trend_strength >= 95.0:
-            # Validation rigoureuse pour éviter les faux signaux 100%
-            if not self.validate_ultra_strict_yolo_signal(None, trend_strength, signal):
-                safe_log(f"🛡️ SIGNAL YOLO REJETÉ - Validation ultra-strict échouée")
-                safe_log(f"🔄 FALLBACK: Traitement comme signal normal de haute qualité ({trend_strength:.1f}%)")
-                # Signal traité comme normal mais avec la force d'origine
-                sl_multiplier = ATR_SL_MULTIPLIER  # 2.5x ATR standard
-            else:
-                # Signal YOLO validé - utiliser SL plus large pour sécurité
-                sl_multiplier = YOLO_SL_MULTIPLIER  # 3.5x ATR au lieu de 2.5x
-                safe_log(f"🚀 SIGNAL YOLO ULTRA-VALIDÉ - SL élargi à {sl_multiplier}x ATR")
-        else:
-            # Signal normal - SL standard
-            sl_multiplier = ATR_SL_MULTIPLIER  # 2.5x ATR standard
+        # Signal normal - SL standard
+        sl_multiplier = ATR_SL_MULTIPLIER  # 2.5x ATR standard
         
         # Récupération prix réel pour calcul TP/SL
         tick_info = mt5.symbol_info_tick(self.symbol)
@@ -3528,7 +3312,7 @@ class M5PullbackBot:
         safe_log(f"   🏗️ SL {sl_description}: ${sl_price:.2f} ({sl_pips:.1f} pips)")
         safe_log(f"   🚀 TP PLAFONNÉ: ${tp_price:.2f} ({tp_points:.0f} pts ≤ 200pts max)")
         safe_log(f"   ⚖️ Ratio R/R: 1:{actual_ratio:.2f} (TP PLAFONNÉ + SL {sl_type})")
-        safe_log(f"   📈 Force signal: {signal['strength']:.1f}%{' (YOLO ULTRA-VALIDÉ)' if trend_strength >= 95 else ''}")
+        safe_log(f"   📈 Force signal: {signal['strength']:.1f}%")
         safe_log(f"   🎯 Qualité pullback: {signal['pullback_quality']:.1f}%")
         safe_log(f"   📊 RSI: {signal['rsi']:.1f}")
         safe_log(f"   🎲 Confiance: {signal['confidence']:.2f}")

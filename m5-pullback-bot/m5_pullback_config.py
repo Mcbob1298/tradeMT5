@@ -1,16 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 CONFIGURATION ULTRA SCALPING BOT
-================# Configuration YOLO (extrêmement risquée)
-YOLO_CONFIG = {
-    'TP_PIPS': 1,
-    'USE_STOP_LOSS': False,
-    'SL_PIPS': 0,
-    'MAX_POSITIONS': 999,
-    'RSI_OVERBOUGHT': 65,  # ULTRA AGRESSIF : 65 au lieu de 75
-    'RSI_OVERSOLD': 35,    # ULTRA AGRESSIF : 35 au lieu de 25
-    'MIN_TREND_STRENGTH': 0.08  # Plus strict : 0.08 au lieu de 0.005
-}====
+=====================================
 
 Paramètres pour le bot ultra agressif contre-tendance
 Modifiez ces valeurs pour ajuster l'agressivité
@@ -27,7 +18,7 @@ LOT_SIZE = 0.01             # Taille des lots (commencer petit!)
 
 # Take Profit et Stop Loss
 TP_PIPS = 2                 # Take Profit en pips (ultra petit!)
-USE_STOP_LOSS = False       # True = SL activé, False = YOLO mode
+USE_STOP_LOSS = False       # True = SL activé, False = mode sans SL
 SL_PIPS = 10                # Stop Loss en pips (si activé)
 
 # Gestion des positions
@@ -87,23 +78,14 @@ AGGRESSIVE_CONFIG = {
     'MIN_TREND_STRENGTH': 0.01
 }
 
-# Configuration YOLO (extrêmement risquée)
-YOLO_CONFIG = {
-    'TP_PIPS': 1,
-    'USE_STOP_LOSS': False,
-    'SL_PIPS': 0,
-    'MAX_POSITIONS': 10,
-    'RSI_OVERBOUGHT': 55,
-    'RSI_OVERSOLD': 45,
-    'MIN_TREND_STRENGTH': 0.005
-}
+
 
 # =============================================================================
 # CONFIGURATION ACTIVE
 # =============================================================================
 
 # Choisissez votre configuration ici:
-ACTIVE_CONFIG = BALANCED_CONFIG  # Changez ici: CONSERVATIVE, BALANCED, AGGRESSIVE, YOLO
+ACTIVE_CONFIG = BALANCED_CONFIG  # Changez ici: CONSERVATIVE, BALANCED, AGGRESSIVE
 
 def get_active_config():
     """Retourne la configuration active"""
@@ -116,8 +98,7 @@ def apply_config(config_name):
     configs = {
         'CONSERVATIVE': CONSERVATIVE_CONFIG,
         'BALANCED': BALANCED_CONFIG, 
-        'AGGRESSIVE': AGGRESSIVE_CONFIG,
-        'YOLO': YOLO_CONFIG
+        'AGGRESSIVE': AGGRESSIVE_CONFIG
     }
     
     if config_name in configs:
@@ -159,7 +140,7 @@ USAGE_NOTES = """
   - Détecte la tendance principale
   - Trade CONTRE la tendance (fade strategy)
   - TP ultra petit (1-3 pips)
-  - SL optionnel (ou mode YOLO)
+  - SL optionnel (ou mode sans SL)
 
 📈 LOGIQUE:
   - Hausse détectée → SELL (bet sur correction)
