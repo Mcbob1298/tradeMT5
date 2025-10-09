@@ -900,7 +900,7 @@ class M5PullbackBot:
             # Calcul de la distance SL basée sur l'ATR pour le lot adaptatif
             atr_sl_distance = signal.get('atr', 2.5) * ATR_SL_MULTIPLIER  # Fallback ATR 2.5 pour XAUUSD
             trend_strength = signal.get('strength', 50)  # Force de la tendance
-            volume = self.calculate_adaptive_lot_size(atr_sl_distance, trend_strength)
+            volume = self.calculate_adaptive_lot_size(atr_sl_distance, trend_strength, trade_type)
             
             # Vérification du symbole
             symbol_info = mt5.symbol_info(self.symbol)
@@ -1076,7 +1076,7 @@ class M5PullbackBot:
                 ticket = mt5_pos.ticket
                 
                 # ✅ Condition 1: Position en profit ET tendance inversée
-                if profit > 5:  # Au moins 5€ de profit
+                if profit > 0:  # Au moins 0€ de profit
                     should_close = False
                     close_reason = ""
                     
@@ -1098,13 +1098,6 @@ class M5PullbackBot:
                             safe_log(f"✅ Position fermée intelligemment: +{profit:.2f}€")
                         else:
                             safe_log(f"❌ Échec fermeture intelligente position {ticket}")
-                
-                # ✅ Condition 2: Position dans le bon sens → Laisser courir
-                elif ((position_type == "BUY" and trend_direction == "BULLISH") or
-                      (position_type == "SELL" and trend_direction == "BEARISH")):
-                    # Position alignée avec la tendance - on laisse courir
-                    if profit > 0:
-                        safe_log(f"🎯 Position {position_type} alignée avec tendance {trend_direction} (+{profit:.2f}€) - Laisser courir")
                 
             except Exception as e:
                 safe_log(f"❌ Erreur analyse position {mt5_pos.ticket}: {e}")
@@ -1946,8 +1939,8 @@ class M5PullbackBot:
             # Pour BUY: SL sous le dernier swing low
             structural_sl = structural_data['swing_low'] - safety_margin
             
-            # Sécurité: SL ne doit pas être trop proche (minimum 1x ATR)
-            min_distance = current_atr * 1.0
+            # Sécurité: SL ne doit pas être trop proche (minimum 2x ATR)
+            min_distance = current_atr * 2.0
             min_allowed_sl = entry_price - min_distance
             
             # Sécurité: SL ne doit pas être trop loin (maximum 5x ATR)
@@ -1972,8 +1965,8 @@ class M5PullbackBot:
             # Pour SELL: SL au-dessus du dernier swing high
             structural_sl = structural_data['swing_high'] + safety_margin
             
-            # Sécurité: SL ne doit pas être trop proche (minimum 1x ATR)
-            min_distance = current_atr * 1.0
+            # Sécurité: SL ne doit pas être trop proche (minimum 2x ATR)
+            min_distance = current_atr * 2.0
             max_allowed_sl = entry_price + min_distance
             
             # Sécurité: SL ne doit pas être trop loin (maximum 5x ATR)
@@ -2097,14 +2090,14 @@ class M5PullbackBot:
             for condition in buy_conditions:
                 safe_log(f"      {condition}")
         
-        # Conditions pour SELL  
+        # Conditions pour SELL (ULTRA-STRICTES)
         elif trend == "BEARISH":
-            safe_log(f"   📉 ANALYSE SELL:")
+            safe_log(f"   📉 ANALYSE SELL (CONDITIONS ULTRA-STRICTES):")
             sell_conditions = []
-            sell_conditions.append(f"✅ Tendance BEARISH" if strength >= 80 else f"❌ Force {strength:.1f}% < 80%")
-            sell_conditions.append(f"✅ Pullback OK" if pullback_quality >= 60 else f"❌ Pullback {pullback_quality:.0f}% < 60%")
-            sell_conditions.append(f"✅ RSI OK" if self.config['RSI_OVERSOLD'] <= current_rsi <= 65 else f"❌ RSI {current_rsi:.1f} hors zone [30-65]")
-            sell_conditions.append(f"✅ ATR OK" if OPTIMAL_ATR_MIN <= current_atr <= OPTIMAL_ATR_MAX else f"❌ ATR {current_atr:.3f} hors plage")
+            sell_conditions.append(f"✅ Tendance BEARISH" if strength >= 95 else f"❌ Force {strength:.1f}% < 95% (ULTRA-STRICT)")
+            sell_conditions.append(f"✅ Pullback OK" if pullback_quality >= 80 else f"❌ Pullback {pullback_quality:.0f}% < 80% (ULTRA-STRICT)")
+            sell_conditions.append(f"✅ RSI OK" if self.config['RSI_OVERSOLD'] <= current_rsi <= self.config['RSI_OVERBOUGHT'] else f"❌ RSI {current_rsi:.1f} hors zone [30-65] (ULTRA-STRICT)")
+            sell_conditions.append(f"✅ ATR OK" if current_atr >= 2.0 and current_atr <= OPTIMAL_ATR_MAX else f"❌ ATR {current_atr:.3f} < 2.0 ou > {OPTIMAL_ATR_MAX} (ULTRA-STRICT)")
             
             for condition in sell_conditions:
                 safe_log(f"      {condition}")
@@ -2887,23 +2880,27 @@ class M5PullbackBot:
         
         return ema
     
-    def calculate_adaptive_lot_size(self, atr_sl_distance, trend_strength=50):
+    def calculate_adaptive_lot_size(self, atr_sl_distance, trend_strength=50, trade_type="BUY"):
         """
-        🚀 CALCUL LOT ADAPTATIF SELON FORCE DE TENDANCE
-        ===============================================
+        🚀 CALCUL LOT ADAPTATIF SELON FORCE DE TENDANCE ET TYPE DE TRADE
+        ================================================================
         
-        NOUVELLE STRATÉGIE INTELLIGENTE :
+        STRATÉGIE BUY (adaptatif selon force) :
         - Force 80-89% : Risque standard 2.5%
         - Force 90-94% : Risque augmenté 3.5% 
         - Force 95-99% : Risque élevé 6%
         - Force 100% : Risque maximum 12% (certitude absolue)
         
+        STRATÉGIE SELL (conservateur fixe) :
+        - Toutes forces : Risque fixe 3% (SELL plus risqué sur XAUUSD)
+        
         Args:
             atr_sl_distance: Distance du Stop Loss basée sur l'ATR
             trend_strength: Force de la tendance (0-100%)
+            trade_type: Type de trade ("BUY" ou "SELL")
             
         Returns:
-            float: Taille de lot optimale (adaptée à la certitude)
+            float: Taille de lot optimale (adaptée à la certitude et au type)
         """
         try:
             # Récupération de l'equity actuelle (capital réel incluant les positions ouvertes)
@@ -2914,22 +2911,29 @@ class M5PullbackBot:
             
             current_equity = account_info.equity
             
-            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE
-            if trend_strength >= 100:
-                risk_percent = 12  # 🚀 Risque maximum - Certitude absolue
-                risk_level = "MAXIMUM"
-            elif trend_strength >= 95.0:
-                risk_percent = 6  # 🎯 Risque élevé - Très forte certitude
-                risk_level = "ÉLEVÉ"
-            elif trend_strength >= 90.0:
-                risk_percent = 3.5  # ⚡ Risque augmenté - Forte certitude
-                risk_level = "AUGMENTÉ"
-            elif trend_strength >= 80.0:
-                risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
-                risk_level = "STANDARD"
+            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE ET TYPE DE TRADE
+            if trade_type == "SELL":
+                # 🔴 SELL: Risque fixe conservateur de 3% (indépendant de la force)
+                risk_percent = 3.0
+                risk_level = "SELL_CONSERVATEUR"
+                safe_log(f"🔴 SELL DÉTECTÉ: Risque fixe 3% appliqué (plus conservateur)")
             else:
-                risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
-                risk_level = "STANDARD"
+                # 🟢 BUY: Risque adaptatif selon la force (logique normale)
+                if trend_strength >= 100:
+                    risk_percent = 12  # 🚀 Risque maximum - Certitude absolue
+                    risk_level = "MAXIMUM"
+                elif trend_strength >= 95.0:
+                    risk_percent = 6  # 🎯 Risque élevé - Très forte certitude
+                    risk_level = "ÉLEVÉ"
+                elif trend_strength >= 90.0:
+                    risk_percent = 3.5  # ⚡ Risque augmenté - Forte certitude
+                    risk_level = "AUGMENTÉ"
+                elif trend_strength >= 80.0:
+                    risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
+                    risk_level = "STANDARD"
+                else:
+                    risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
+                    risk_level = "STANDARD"
             
             # 🛡️ APPLICATION DU MODE DÉGRADÉ
             if self.stats.get('balance_safety_active', False):
@@ -3150,13 +3154,15 @@ class M5PullbackBot:
                 'confidence': min(strength + pullback_quality, 100) / 100
             }
 
-        # 🔴 STRATÉGIE 2: VENTE SUR PULLBACK BAISSIER (SELL)
-        # Conditions: Tendance baissière + Confirmation H1 + Pullback détecté + RSI favorable
+        # 🔴 STRATÉGIE 2: VENTE SUR PULLBACK BAISSIER (SELL) - CONDITIONS ULTRA-STRICTES
+        # ⚠️ SELL très risqué sur XAUUSD - Conditions drastiquement renforcées
         elif (trend == "BEARISH" and 
-              h1_trend == "BEARISH" and  # 🛡️ CONFIRMATION H1 OBLIGATOIRE
-              pullback_quality >= 60 and     # Pullback détecté (prix proche EMA50)
+              strength >= 95.0 and           # 🚨 ULTRA-STRICT: 95% minimum (au lieu de 80%)
+              h1_trend == "BEARISH" and      # 🛡️ CONFIRMATION H1 OBLIGATOIRE
+              pullback_quality >= 80 and    # 🚨 ULTRA-STRICT: 80% minimum (au lieu de 60%)
               current_rsi >= self.config['RSI_OVERSOLD'] and  # RSI > 30 (pas en survente extrême)
-              current_rsi <= 65):            # RSI pas trop élevé (évite faux rebonds)
+              current_rsi <= self.config['RSI_OVERBOUGHT'] and  # RSI ≤ 65 (même que BUY)
+              current_atr >= 2.0):          # 🚨 ULTRA-STRICT: ATR ≥ 2.0 (volatilité forte requise)
             
             # Cooldown SELL adaptatif
             sell_cooldown = 300  # 5 minutes entre les trades
@@ -3171,11 +3177,13 @@ class M5PullbackBot:
                 self.log_detailed_market_analysis(trend, strength, indicators, "SIGNAL_VALIDE_COOLDOWN")
                 return None
             
-            # 🎯 Signal SELL validé !
-            safe_log(f"🔴 SIGNAL SELL VALIDÉ! Toutes conditions remplies:")
-            safe_log(f"   📈 Tendance: {trend} {strength:.1f}%")
-            safe_log(f"   📊 RSI: {current_rsi:.1f} (30-65 optimal pour SELL)")
-            safe_log(f"   🎯 Pullback: {pullback_quality:.0f}%")
+            # 🎯 Signal SELL ULTRA-STRICT validé !
+            safe_log(f"🔴 SIGNAL SELL ULTRA-VALIDÉ! Conditions drastiques remplies:")
+            safe_log(f"   📈 Tendance: {trend} {strength:.1f}% (≥95% requis)")
+            safe_log(f"   📊 RSI: {current_rsi:.1f} (30-65 comme BUY)")
+            safe_log(f"   🎯 Pullback: {pullback_quality:.0f}% (≥80% requis)")
+            safe_log(f"   ⚡ ATR: {current_atr:.2f} (≥2.0 requis)")
+            safe_log(f"   🚨 CONDITIONS ULTRA-STRICTES POUR RÉDUIRE RISQUES SELL")
             
             # Message cooldown adaptatif selon la situation
             if time_since_last_sell == float('inf'):
