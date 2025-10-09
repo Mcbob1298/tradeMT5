@@ -399,45 +399,79 @@ class M5PullbackBot:
             return False
     
     def calculate_adaptive_max_positions(self):
-        """🧮 Calcule le nombre maximum de positions (fixé à 3 pour éviter 'No money')"""
+        """
+        🧮 SYSTÈME DE POSITIONS ADAPTATIVES PROGRESSIVES
+        =================================================
+        
+        Calcule le nombre maximum de positions selon l'équité du portefeuille.
+        Permet une meilleure utilisation du capital tout en protégeant les petits comptes.
+        
+        Paliers progressifs :
+        - < 1 000€    : 1 position  (ultra-prudence, capital trop faible)
+        - 1 000-2 000€: 2 positions (croissance prudente)
+        - 2 000-5 000€: 3 positions (expansion modérée)
+        - 5 000-10 000€: 4 positions (bonne marge de manœuvre)
+        - 10 000-20 000€: 5 positions (diversification accrue)
+        - 20 000-50 000€: 6 positions (gestion professionnelle)
+        - > 50 000€   : 7 positions (capital solide)
+        """
         try:
             account_info = mt5.account_info()
             if not account_info:
-                safe_log("⚠️ Impossible de récupérer equity, MAX_POSITIONS par défaut: 3")
-                return 3
-            
-            # 💰 UTILISATION DE L'EQUITY (moyens réels) au lieu de la balance
+                safe_log("⚠️ Impossible de récupérer equity, MAX_POSITIONS par défaut: 2")
+                return 2
+
+            # 💰 UTILISATION DE L'EQUITY (moyens réels incluant positions ouvertes)
             equity = account_info.equity
-            
-            # � LIMITE FIXE OPTIMISÉE POUR ÉVITER "NO MONEY"
-            # 🔒 LIMITE ADAPTÉE À L'EQUITY (moyens réels)
-            if equity < 2000:
-                max_positions_final = 2  # Faibles moyens = prudence
+
+            # 🎯 SYSTÈME PROGRESSIF ADAPTATIF
+            if equity < 1000:
+                max_positions_final = 1  # Ultra-prudence pour très petits comptes
+                niveau = "TRÈS FAIBLE"
+            elif equity < 2000:
+                max_positions_final = 2  # Croissance prudente
+                niveau = "FAIBLE"
             elif equity < 5000:
-                max_positions_final = 3  # Moyens moyens = croissance modérée (réduit)
+                max_positions_final = 3  # Expansion modérée
+                niveau = "MOYENNE"
             elif equity < 10000:
-                max_positions_final = 3  # Bons moyens = expansion contrôlée (réduit)
+                max_positions_final = 4  # Bonne marge de manœuvre
+                niveau = "BONNE"
+            elif equity < 20000:
+                max_positions_final = 5  # Diversification accrue
+                niveau = "FORTE"
+            elif equity < 50000:
+                max_positions_final = 6  # Gestion professionnelle
+                niveau = "TRÈS FORTE"
             else:
-                max_positions_final = 3  # Forts moyens = max 3 positions (avec risque 6% max)
-            
-            # �️ CALCUL INFORMATIF SEULEMENT
-            risque_acceptable = equity * 0.025  # 2.5% de l'equity par position
-            perte_par_position = risque_acceptable  # Perte estimée par position
-            risque_total_max = perte_par_position * max_positions_final
-            
-            safe_log(f"🧮 POSITION SIZING ADAPTATIF:")
-            safe_log(f"   💰 Equity: {equity:.2f}€")
-            safe_log(f"   � Niveau de balance: {'Faible' if equity < 2000 else 'Moyenne' if equity < 5000 else 'Bonne' if equity < 10000 else 'Forte'}")
-            safe_log(f"   � Max positions adaptées: {max_positions_final}")
-            safe_log(f"   �️ Risque par position (2.5%): {risque_acceptable:.2f}€")
-            safe_log(f"   💸 Risque total maximum: {risque_total_max:.2f}€ ({(risque_total_max/equity*100):.1f}% de l'equity)")
-            safe_log(f"   ✅ Optimisation intelligente activée")
-            
+                max_positions_final = 7  # Capital solide
+                niveau = "EXCELLENTE"
+
+            # 📊 CALCUL DU RISQUE TOTAL ESTIMÉ
+            # Risque moyen par position BUY: ~5% (entre 2.5% et 6%)
+            # Risque fixe SELL: 3%
+            risque_moyen_par_position = 0.04  # 4% moyen (conservateur)
+            risque_total_max_pct = risque_moyen_par_position * max_positions_final * 100
+            risque_total_max_eur = equity * risque_moyen_par_position * max_positions_final
+
+            safe_log(f"")
+            safe_log(f"{'='*60}")
+            safe_log(f"🧮 POSITION SIZING ADAPTATIF PROGRESSIF")
+            safe_log(f"{'='*60}")
+            safe_log(f"   💰 Equity actuelle: {equity:,.2f}€")
+            safe_log(f"   📊 Niveau de capital: {niveau}")
+            safe_log(f"   🎯 Positions simultanées max: {max_positions_final}")
+            safe_log(f"   🛡️ Risque moyen par position: {risque_moyen_par_position*100:.1f}%")
+            safe_log(f"   💸 Risque total maximum: {risque_total_max_eur:.2f}€ ({risque_total_max_pct:.1f}% de l'equity)")
+            safe_log(f"   ✅ Système progressif optimisé activé")
+            safe_log(f"{'='*60}")
+            safe_log(f"")
+
             return max_positions_final
-            
+
         except Exception as e:
             safe_log(f"❌ Erreur calcul max positions adaptatif: {e}")
-            return 20  # Valeur par défaut en cas d'erreur
+            return 2  # Valeur par défaut prudente en cas d'erreur
     
     def calculate_adaptive_tp_ratio(self, trend_strength):
         """
