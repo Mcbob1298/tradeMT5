@@ -107,7 +107,8 @@ RSI_PERIOD = 14                 # RSI standard (14 périodes)
 
 # 🎯 STRATÉGIE RÉVISÉE : TP PETITS + SL GRANDS + LOTS ÉLEVÉS
 ATR_PULLBACK_MULTIPLIER = 3.0   # Distance max à l'EMA 50 (3.0x ATR - zone pullback plus proche)
-ATR_SL_MULTIPLIER = 2.5         # 🔥 SL plus grand à 2.5x ATR (plus de respiration)
+ATR_SL_MULTIPLIER = 2.5         # � SL BUY : 2.5x ATR (standard)
+ATR_SL_MULTIPLIER_SELL = 5.0    # 🔴 SL SELL : 5.0x ATR (plus de marge pour les shorts)
 TP_MAX_POINTS = 200             # 🎯 TP maximum : 200 points (20 pips) - PLAFONNÉ
 RISK_MULTIPLIER = 1.5           # 💰 Multiplicateur de risque augmenté (lots plus élevés)
 
@@ -3253,8 +3254,12 @@ class M5PullbackBot:
         current_price = signal.get('price', None)
         trend_strength = signal.get('strength', 50)
         
-        # Signal normal - SL standard
-        sl_multiplier = ATR_SL_MULTIPLIER  # 2.5x ATR standard
+        # SL adaptatif selon le type de trade
+        if trade_type == "SELL":
+            sl_multiplier = ATR_SL_MULTIPLIER_SELL  # 5.0x ATR pour SELL (plus de marge)
+            safe_log(f"🔴 SELL DÉTECTÉ: SL élargi à {sl_multiplier}x ATR pour plus de marge")
+        else:
+            sl_multiplier = ATR_SL_MULTIPLIER  # 2.5x ATR standard pour BUY
         
         # Récupération prix réel pour calcul TP/SL
         tick_info = mt5.symbol_info_tick(self.symbol)
