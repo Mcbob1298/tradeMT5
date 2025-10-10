@@ -3196,11 +3196,17 @@ class M5PullbackBot:
         
         # 🎯 FILTRE QUALITÉ ULTRA-STRICT : 80% de certitude sur la tendance
         if strength < 80:  # ⚡ NOUVEAU SEUIL : 80% minimum (au lieu de 70%)
-            safe_log(f"❌ SIGNAL REJETÉ: Force {strength:.1f}% < 80% requis - Pas assez fiable")
-            # 🔍 DIAGNOSTIC COMPLET pour TOUS les signaux rejetés (seuil abaissé)
-            if strength >= 10:  # Diagnostic pour presque tous les signaux
-                self.log_detailed_market_analysis(trend, strength, indicators, "FORCE_INSUFFISANTE")
-            return None
+            # 🔍 DIAGNOSTIC DIFFÉRENCIÉ : Complet pour BULLISH/NEUTRAL, Minimal pour BEARISH
+            if trend == "BEARISH":
+                # Message minimal pour tendance baissière (bot ne trade pas en BEARISH)
+                safe_log(f"📉 Tendance BEARISH détectée → Bot en attente de tendance BULLISH")
+                return None
+            else:
+                # Diagnostic complet pour BULLISH/NEUTRAL avec force insuffisante
+                safe_log(f"❌ SIGNAL REJETÉ: Force {strength:.1f}% < 80% requis - Pas assez fiable")
+                if strength >= 10:  # Diagnostic pour presque tous les signaux
+                    self.log_detailed_market_analysis(trend, strength, indicators, "FORCE_INSUFFISANTE")
+                return None
         
         if pullback_quality < 60:  # Qualité pullback minimale (60%)
             safe_log(f"❌ SIGNAL REJETÉ: Pullback {pullback_quality:.0f}% < 60% requis")
@@ -3506,24 +3512,96 @@ class M5PullbackBot:
         
         # 🔬 DIAGNOSTIC SYSTÉMATIQUE (simplifié pour BEARISH)
         if trend == "BEARISH":
-            # Log minimaliste pour BEARISH - pas de diagnostic détaillé
-            safe_log(f"🧪 DIAGNOSTIC M5: BEARISH détecté → Pas de trading (bot BUY uniquement)")
+            # Message unique et concis pour BEARISH - pas de redondance
+            pass  # Le message est maintenant géré uniquement dans should_open_position()
+        elif trend == "BULLISH":
+            # 🎯 DIAGNOSTIC DÉTAILLÉ POUR BULLISH : Checklist complète des conditions
+            safe_log(f"🎯 BULLISH DÉTECTÉ - Vérification conditions de trade:")
+            
+            # Condition 1 : Force de tendance
+            if strength >= 80:
+                safe_log(f"   ✅ Force: {strength:.1f}% (≥80% requis)")
+            else:
+                safe_log(f"   ❌ Force: {strength:.1f}% < 80% requis | Manque: {80-strength:.1f}%")
+            
+            # Condition 2 : Qualité du pullback
+            distance_to_ema50 = abs(current_price - ema_pullback)
+            pullback_threshold = current_atr * 3.0
+            if pullback_quality >= 60:
+                safe_log(f"   ✅ Pullback: {pullback_quality:.0f}% (≥60% requis) | Prix proche EMA50")
+            else:
+                safe_log(f"   ❌ Pullback: {pullback_quality:.0f}% < 60% requis")
+                safe_log(f"      📏 Distance à EMA50: {distance_to_ema50:.4f} | Max accepté: {pullback_threshold:.4f}")
+                if distance_to_ema50 > pullback_threshold:
+                    safe_log(f"      💡 Prix trop éloigné de l'EMA50 → Attendre le rapprochement")
+            
+            # Condition 3 : RSI
+            rsi_overbought = self.config['RSI_OVERBOUGHT']
+            if current_rsi <= rsi_overbought:
+                safe_log(f"   ✅ RSI: {current_rsi:.1f} (≤{rsi_overbought} requis) | Pas de surachat")
+            else:
+                safe_log(f"   ❌ RSI: {current_rsi:.1f} > {rsi_overbought} | Surachat → Attendre correction")
+            
+            # Condition 4 : ATR (Volatilité)
+            if 1.5 <= current_atr <= 7.0:
+                safe_log(f"   ✅ ATR: {current_atr:.3f} (plage optimale: 1.5-7.0)")
+            elif current_atr < 1.5:
+                safe_log(f"   ❌ ATR: {current_atr:.3f} < 1.5 | Marché trop calme")
+            else:
+                safe_log(f"   ❌ ATR: {current_atr:.3f} > 7.0 | Marché trop volatil")
+            
+            # Condition 5 : Prix > EMA200 (tendance de fond)
+            if current_price > ema_master:
+                safe_log(f"   ✅ Prix ${current_price:.2f} > EMA200 ${ema_master:.2f} | Tendance haussière confirmée")
+            else:
+                safe_log(f"   ❌ Prix ${current_price:.2f} ≤ EMA200 ${ema_master:.2f} | Tendance de fond pas haussière")
+            
+            # Condition 6 : Confirmation H1
+            if ENABLE_H1_CONFIRMATION:
+                h1_trend = self.get_h1_trend_confirmation()
+                if h1_trend == "BULLISH":
+                    safe_log(f"   ✅ Confirmation H1: BULLISH | Tendance de fond alignée")
+                elif h1_trend == "BEARISH":
+                    safe_log(f"   ❌ Confirmation H1: BEARISH | Conflit avec M5 → Pas de trade")
+                else:
+                    safe_log(f"   ⚠️ Confirmation H1: NEUTRAL | Direction incertaine")
+            
+            # Condition 7 : Positions disponibles
+            current_positions = len(self.open_positions)
+            max_positions = self.calculate_adaptive_max_positions()
+            if current_positions < max_positions:
+                safe_log(f"   ✅ Positions: {current_positions}/{max_positions} | Capacité disponible")
+            else:
+                safe_log(f"   ❌ Positions: {current_positions}/{max_positions} | Limite atteinte")
+            
+            # Résumé visuel
+            conditions_ok = 0
+            conditions_total = 7
+            if strength >= 80: conditions_ok += 1
+            if pullback_quality >= 60: conditions_ok += 1
+            if current_rsi <= rsi_overbought: conditions_ok += 1
+            if 1.5 <= current_atr <= 7.0: conditions_ok += 1
+            if current_price > ema_master: conditions_ok += 1
+            if not ENABLE_H1_CONFIRMATION or h1_trend == "BULLISH": conditions_ok += 1
+            if current_positions < max_positions: conditions_ok += 1
+            
+            percentage_ready = (conditions_ok / conditions_total) * 100
+            safe_log(f"   📊 Conditions remplies: {conditions_ok}/{conditions_total} ({percentage_ready:.0f}%)")
+            
+            if conditions_ok == conditions_total:
+                safe_log(f"   🚀 TOUTES LES CONDITIONS OK → Vérification cooldown...")
+            else:
+                safe_log(f"   ⏳ Manque {conditions_total - conditions_ok} condition(s) → Attente...")
         else:
-            # Diagnostic complet pour BULLISH et NEUTRAL
+            # Diagnostic pour NEUTRAL
             safe_log(f"🧪 DIAGNOSTIC M5: Force {strength:.1f}% | Pullback {pullback_quality:.0f}% | RSI {current_rsi:.1f} | ATR {current_atr:.3f}")
             if strength < 80:
                 safe_log(f"   ❌ Force insuffisante: {strength:.1f}% < 80% requis")
             if pullback_quality < 60:
-                # Calcul explicatif pour le pullback
                 distance_to_ema50 = abs(current_price - ema_pullback)
-                pullback_threshold = current_atr * 3.0  # ATR_PULLBACK_MULTIPLIER
+                pullback_threshold = current_atr * 3.0
                 safe_log(f"   ❌ Pullback faible: {pullback_quality:.0f}% < 60% requis")
                 safe_log(f"      📏 Distance prix/EMA50: {distance_to_ema50:.4f} | Seuil max: {pullback_threshold:.4f} (3.0×ATR)")
-                safe_log(f"      💰 Prix: {current_price:.4f} | EMA50: {ema_pullback:.4f}")
-                if distance_to_ema50 > pullback_threshold:
-                    safe_log(f"      🚫 TROP ÉLOIGNÉ: Prix dépasse la zone pullback de {(distance_to_ema50/pullback_threshold*100-100):.1f}%")
-                else:
-                    safe_log(f"      ⚡ Dans zone pullback mais qualité: {pullback_quality:.1f}%")
             if current_rsi < 30 or current_rsi > 70:
                 safe_log(f"   ⚡ RSI en zone: {current_rsi:.1f} (30-70 = neutre)")
             if current_atr < 1.5 or current_atr > 7.0:
