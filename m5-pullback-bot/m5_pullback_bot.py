@@ -134,7 +134,7 @@ STRUCTURAL_TRAILING_BUFFER = 0.3    # Buffer de sécurité (0.3x ATR sous le plu
 ENABLE_DYNAMIC_TP = True             # ✅ Active l'ajustement dynamique du TP
 DYNAMIC_TP_STRENGTH_THRESHOLD = 95   # Si force > 95%, on éloigne le TP (marché TRÈS fort)
 DYNAMIC_TP_MIN_PROFIT_PERCENT = 40   # Activation seulement si position > 40% du TP
-DYNAMIC_TP_EXTENSION_MULTIPLIER = 1.3 # Éloigne le TP de 30% supplémentaire si accélération
+DYNAMIC_TP_EXTENSION_MULTIPLIER = 1.5 # Éloigne le TP de 50% supplémentaire si accélération
 DYNAMIC_TP_RSI_WEAKNESS = 60         # Si RSI < 60, on sécurise via trailing agressif
 DYNAMIC_TP_MIN_IMPROVEMENT = 0.0010  # Amélioration minimale (10 points) pour modifier TP
 
