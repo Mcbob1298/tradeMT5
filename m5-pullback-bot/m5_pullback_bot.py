@@ -2038,14 +2038,15 @@ class M5PullbackBot:
             current_price = close_h1[-1]
             current_ema50_h1 = ema50_h1[-1]
 
-            # Calcul de la force de la tendance H1
-            price_distance_h1 = abs(current_price - current_ema50_h1) / current_price * 100
+            # Calcul de la force de la tendance H1 (en % et en prix)
+            price_difference = current_price - current_ema50_h1  # Différence brute en prix
+            price_distance_h1 = abs(price_difference) / current_price * 100  # Pourcentage
             
             if current_price > current_ema50_h1:
-                safe_log(f"📈 CONFIRMATION H1: Tendance HAUSSIÈRE (Prix > EMA50 H1, écart: +{price_distance_h1:.2f}%)")
+                safe_log(f"📈 CONFIRMATION H1: Tendance HAUSSIÈRE (Prix > EMA50 H1, écart: +{price_distance_h1:.2f}% / +${price_difference:.2f})")
                 return "BULLISH"
             else:
-                safe_log(f"📉 CONFIRMATION H1: Tendance BAISSIÈRE (Prix < EMA50 H1, écart: -{price_distance_h1:.2f}%)")
+                safe_log(f"📉 CONFIRMATION H1: Tendance BAISSIÈRE (Prix < EMA50 H1, écart: -{price_distance_h1:.2f}% / ${price_difference:.2f})")
                 return "BEARISH"
 
         except Exception as e:
@@ -3190,23 +3191,23 @@ class M5PullbackBot:
         current_atr = indicators['atr']
         pullback_quality = indicators['pullback_quality']
         
-        # �️ VÉRIFICATION MODE SÉCURITÉ BALANCE
+        # 🛡️ VÉRIFICATION MODE SÉCURITÉ BALANCE
         if self.stats['balance_safety_active']:
             return None  # Pas de nouveaux trades en mode sécurité
         
+        # 🚫 FILTRE BEARISH PRIORITAIRE : Rejet immédiat si tendance baissière
+        if trend == "BEARISH":
+            # Message minimal pour tendance baissière (bot ne trade pas en BEARISH)
+            safe_log(f"📉 Tendance BEARISH détectée → Bot en attente de tendance BULLISH")
+            return None
+        
         # 🎯 FILTRE QUALITÉ ULTRA-STRICT : 80% de certitude sur la tendance
         if strength < 80:  # ⚡ NOUVEAU SEUIL : 80% minimum (au lieu de 70%)
-            # 🔍 DIAGNOSTIC DIFFÉRENCIÉ : Complet pour BULLISH/NEUTRAL, Minimal pour BEARISH
-            if trend == "BEARISH":
-                # Message minimal pour tendance baissière (bot ne trade pas en BEARISH)
-                safe_log(f"📉 Tendance BEARISH détectée → Bot en attente de tendance BULLISH")
-                return None
-            else:
-                # Diagnostic complet pour BULLISH/NEUTRAL avec force insuffisante
-                safe_log(f"❌ SIGNAL REJETÉ: Force {strength:.1f}% < 80% requis - Pas assez fiable")
-                if strength >= 10:  # Diagnostic pour presque tous les signaux
-                    self.log_detailed_market_analysis(trend, strength, indicators, "FORCE_INSUFFISANTE")
-                return None
+            # Diagnostic complet pour BULLISH/NEUTRAL avec force insuffisante
+            safe_log(f"❌ SIGNAL REJETÉ: Force {strength:.1f}% < 80% requis - Pas assez fiable")
+            if strength >= 10:  # Diagnostic pour presque tous les signaux
+                self.log_detailed_market_analysis(trend, strength, indicators, "FORCE_INSUFFISANTE")
+            return None
         
         if pullback_quality < 60:  # Qualité pullback minimale (60%)
             safe_log(f"❌ SIGNAL REJETÉ: Pullback {pullback_quality:.0f}% < 60% requis")
