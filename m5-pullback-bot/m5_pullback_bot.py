@@ -119,6 +119,24 @@ DEGRADED_MODE_RISK_MULTIPLIER = 0.2  # Risque = 20% du risque normal (2.5% -> 0.
 DEGRADED_MODE_RECOVERY_THRESHOLD = -2.0  # Seuil de sortie du mode dégradé (-2%)
 DEGRADED_MODE_MAX_RR_RATIO = 1.0  # Ratio R/R plafonné à 1:1 en mode dégradé
 
+# 🎯 SCALING OUT (Prise de Profit Partielle) - NOUVEAU
+ENABLE_SCALING_OUT = True          # ✅ Active la prise de profit partielle
+SCALING_OUT_TP_PERCENT = 80        # À 80% du TP, ferme 50% de la position
+SCALING_OUT_CLOSE_PERCENT = 50     # Ferme 50% de la position (le reste continue)
+SCALING_OUT_MIN_LOT = 0.02         # Lot minimum pour scaling out (2x 0.01)
+
+# 📊 TRAILING STOP STRUCTUREL - NOUVEAU
+ENABLE_STRUCTURAL_TRAILING = True   # ✅ Active le trailing stop structurel
+STRUCTURAL_TRAILING_LOOKBACK = 3    # Nombre de bougies à analyser (3 dernières bougies M5)
+STRUCTURAL_TRAILING_BUFFER = 0.3    # Buffer de sécurité (0.3x ATR sous le plus bas)
+
+# 🎯 TP DYNAMIQUE (Ajustement en Temps Réel) - NOUVEAU
+ENABLE_DYNAMIC_TP = True             # ✅ Active l'ajustement dynamique du TP
+DYNAMIC_TP_STRENGTH_THRESHOLD = 95   # Si force > 95%, on éloigne le TP (marché TRÈS fort)
+DYNAMIC_TP_MIN_PROFIT_PERCENT = 40   # Activation seulement si position > 40% du TP
+DYNAMIC_TP_EXTENSION_MULTIPLIER = 1.3 # Éloigne le TP de 30% supplémentaire si accélération
+DYNAMIC_TP_RSI_WEAKNESS = 60         # Si RSI < 60, on sécurise via trailing agressif
+DYNAMIC_TP_MIN_IMPROVEMENT = 0.0010  # Amélioration minimale (10 points) pour modifier TP
 
 CONFIRMATION_DELAY_SECONDS = 180      # 3 minutes d'attente pour confirmation
 SIGNAL_PERSISTENCE_CHECKS = 3         # Signal doit persister 3 vérifications
@@ -1020,9 +1038,15 @@ class M5PullbackBot:
                 'volume': result.volume,
                 'open_price': price,  # Utilise le prix de la requête, pas result.price qui peut être 0.0
                 'tp': tp_price,  # ✅ UTILISE LE TP ADAPTATIF PASSÉ EN ARGUMENT
-                'sl': sl_price
+                'sl': sl_price,
+                'opening_strength': signal.get('strength', 50)  # 🎯 FORCE À L'OUVERTURE pour TP dynamique
             }
             self.open_positions.append(position_info)
+            
+            # 🎯 Enregistrement de la force initiale pour le TP dynamique
+            if not hasattr(self, '_opening_strengths'):
+                self._opening_strengths = {}
+            self._opening_strengths[result.order] = signal.get('strength', 50)
             
             # Mise à jour stats
             self.stats['total_trades'] += 1
@@ -1334,16 +1358,23 @@ class M5PullbackBot:
     
     def check_and_move_sl_to_breakeven(self):
         """
-        🚀 TRAILING STOP INTELLIGENT - Protection Progressive des Gains
-        ===============================================================
+        🚀 SYSTÈME AVANCÉ DE GESTION DES PROFITS
+        =========================================
         
-        Principe Ultra-Agressif : Protection dès 30% + Adaptation continue
+        🎯 SCALING OUT (Prise de Profit Partielle) :
+        - À 80% du TP → Fermeture de 50% de la position (gain sécurisé)
+        - Le reste (50%) continue avec trailing stop vers le TP final
         
-        Étapes de protection :
-        1️⃣ 30% du TP → SL à 10% du profit (gain minimum sécurisé)
-        2️⃣ 50% du TP → SL à 25% du profit (gain partiel sécurisé)
-        3️⃣ 75% du TP → SL à 50% du profit (gain substantiel)
-        4️⃣ 90% du TP → SL à 75% du profit (quasi TP sécurisé)
+        📊 TRAILING STOP STRUCTUREL :
+        - Suit le plus bas des 3 dernières bougies M5
+        - S'adapte à la volatilité réelle du marché
+        - Plus intelligent que les pourcentages fixes
+        
+        🔒 PROTECTION PROGRESSIVE CLASSIQUE (si scaling out pas activé) :
+        - 30% du TP → SL à 10% du profit
+        - 50% du TP → SL à 25% du profit
+        - 75% du TP → SL à 50% du profit
+        - 90% du TP → SL à 75% du profit
         
         ⚡ RÈGLE D'OR : Le SL ne recule JAMAIS, seulement progression !
         """
@@ -1403,8 +1434,146 @@ class M5PullbackBot:
                     tp_progress_pct = (current_profit_distance / tp_distance) * 100
                 else:
                     tp_progress_pct = 0
+                
+                # 🎯 SCALING OUT - Prise de Profit Partielle (PRIORITÉ 1)
+                if ENABLE_SCALING_OUT and tp_progress_pct >= SCALING_OUT_TP_PERCENT:
+                    # Vérifier si scaling out déjà fait pour ce ticket
+                    if not hasattr(self, '_scaled_out_tickets'):
+                        self._scaled_out_tickets = set()
+                    
+                    if ticket not in self._scaled_out_tickets:
+                        # Vérifier si le volume le permet (au moins 0.02 pour pouvoir diviser par 2)
+                        if mt5_position.volume >= SCALING_OUT_MIN_LOT:
+                            # Calcul du volume à fermer (50%)
+                            close_volume = round(mt5_position.volume * (SCALING_OUT_CLOSE_PERCENT / 100), 2)
+                            
+                            # S'assurer que le volume restant est valide
+                            remaining_volume = mt5_position.volume - close_volume
+                            if remaining_volume >= symbol_info.volume_min and close_volume >= symbol_info.volume_min:
+                                
+                                safe_log(f"🎯 SCALING OUT - Ticket {ticket} (progression: {tp_progress_pct:.1f}%)")
+                                safe_log(f"   💰 Profit actuel: +{current_profit:.2f}€")
+                                safe_log(f"   📊 Fermeture partielle: {close_volume} lots sur {mt5_position.volume}")
+                                
+                                # Fermeture partielle
+                                close_request = {
+                                    "action": mt5.TRADE_ACTION_DEAL,
+                                    "symbol": self.symbol,
+                                    "volume": close_volume,
+                                    "type": mt5.ORDER_TYPE_SELL,  # Inverse du BUY
+                                    "position": ticket,
+                                    "price": current_price.bid,
+                                    "deviation": 20,
+                                    "magic": mt5_position.magic,
+                                    "comment": "ScalingOut-50%",
+                                    "type_time": mt5.ORDER_TIME_GTC,
+                                    "type_filling": mt5.ORDER_FILLING_IOC,
+                                }
+                                
+                                try:
+                                    result = mt5.order_send(close_request)
+                                    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                        partial_profit = (close_volume / mt5_position.volume) * current_profit
+                                        safe_log(f"✅ SCALING OUT RÉUSSI!")
+                                        safe_log(f"   💰 Gain encaissé: +{partial_profit:.2f}€")
+                                        safe_log(f"   📊 Volume restant: {remaining_volume} lots")
+                                        safe_log(f"   🔄 Le reste continue vers le TP complet")
+                                        
+                                        # Déplacer le SL à breakeven pour le reste
+                                        breakeven_request = {
+                                            "action": mt5.TRADE_ACTION_SLTP,
+                                            "symbol": self.symbol,
+                                            "position": ticket,
+                                            "sl": entry_price + (0.5 * symbol_info.point),  # Légèrement en profit
+                                            "tp": mt5_position.tp,
+                                            "magic": mt5_position.magic,
+                                            "comment": "Breakeven-AfterScaling"
+                                        }
+                                        
+                                        be_result = mt5.order_send(breakeven_request)
+                                        if be_result and be_result.retcode == mt5.TRADE_RETCODE_DONE:
+                                            safe_log(f"   🛡️ SL déplacé à breakeven (+0.5 pts)")
+                                        
+                                        # Marquer ce ticket comme scalé
+                                        self._scaled_out_tickets.add(ticket)
+                                        continue  # Passer au ticket suivant
+                                        
+                                    else:
+                                        error_msg = getattr(result, 'comment', "Erreur inconnue") if result else "Aucun résultat"
+                                        safe_log(f"❌ Échec scaling out: {error_msg}")
+                                except Exception as e:
+                                    safe_log(f"❌ Erreur scaling out {ticket}: {e}")
 
-                # 🚀 TRAILING STOP INTELLIGENT - Déclenchement précoce à 30%
+                # 📊 TRAILING STOP STRUCTUREL (PRIORITÉ 2 - après scaling out)
+                if ENABLE_STRUCTURAL_TRAILING and tp_progress_pct >= 30.0:
+                    # Récupérer les dernières bougies M5
+                    rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, STRUCTURAL_TRAILING_LOOKBACK + 1)
+                    if rates is not None and len(rates) >= STRUCTURAL_TRAILING_LOOKBACK:
+                        # Trouver le plus bas des X dernières bougies
+                        recent_lows = [rate['low'] for rate in rates[-STRUCTURAL_TRAILING_LOOKBACK:]]
+                        structural_low = min(recent_lows)
+                        
+                        # Calculer l'ATR pour le buffer
+                        atr_values = []
+                        for i in range(1, min(14, len(rates))):
+                            high_low = rates[i]['high'] - rates[i]['low']
+                            high_close_prev = abs(rates[i]['high'] - rates[i-1]['close'])
+                            low_close_prev = abs(rates[i]['low'] - rates[i-1]['close'])
+                            true_range = max(high_low, high_close_prev, low_close_prev)
+                            atr_values.append(true_range)
+                        
+                        current_atr = sum(atr_values) / len(atr_values) if atr_values else 0.01
+                        buffer = current_atr * STRUCTURAL_TRAILING_BUFFER
+                        
+                        # SL structurel = plus bas - buffer
+                        new_sl_structural = structural_low - buffer
+                        
+                        # 🛡️ RÈGLE D'OR : Ne JAMAIS reculer le SL
+                        current_sl = mt5_position.sl if mt5_position.sl > 0 else entry_price
+                        
+                        # S'assurer que le SL structurel est meilleur que l'actuel ET en profit
+                        if new_sl_structural > current_sl and new_sl_structural > entry_price:
+                            # Vérifier distances minimales MT5
+                            tick_info = mt5.symbol_info_tick(self.symbol)
+                            if tick_info:
+                                stops_level = getattr(symbol_info, 'trade_stops_level', 10)
+                                min_distance = max(stops_level * symbol_info.point, 10 * symbol_info.point)
+                                spread = symbol_info.spread * symbol_info.point
+                                safety_buffer_struct = max(min_distance * 2, 20 * symbol_info.point) + spread
+                                max_allowed_sl = tick_info.bid - safety_buffer_struct
+                                
+                                if new_sl_structural < max_allowed_sl:
+                                    safe_log(f"📊 TRAILING STOP STRUCTUREL - Ticket {ticket}")
+                                    safe_log(f"   📉 Plus bas {STRUCTURAL_TRAILING_LOOKBACK} bougies: {structural_low:.5f}")
+                                    safe_log(f"   🛡️ Buffer (0.3x ATR): -{buffer:.5f}")
+                                    safe_log(f"   🔄 SL: {current_sl:.5f} → {new_sl_structural:.5f}")
+                                    
+                                    profit_secured_pips = (new_sl_structural - entry_price) / symbol_info.point / 10
+                                    safe_log(f"   💰 Profit sécurisé: +{profit_secured_pips:.1f} pips")
+                                    
+                                    # Modifier le SL
+                                    request = {
+                                        "action": mt5.TRADE_ACTION_SLTP,
+                                        "symbol": self.symbol,
+                                        "position": ticket,
+                                        "sl": new_sl_structural,
+                                        "tp": mt5_position.tp,
+                                        "magic": mt5_position.magic,
+                                        "comment": "StructuralTrailing"
+                                    }
+                                    
+                                    try:
+                                        result = mt5.order_send(request)
+                                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                            safe_log(f"✅ TRAILING STRUCTUREL ACTIVÉ!")
+                                            continue  # Passer au ticket suivant
+                                        elif result:
+                                            # En cas d'erreur, on passe au trailing classique
+                                            safe_log(f"⚠️ Échec trailing structurel, passage au classique")
+                                    except Exception as e:
+                                        safe_log(f"⚠️ Erreur trailing structurel: {e}")
+
+                # 🚀 TRAILING STOP PROGRESSIF CLASSIQUE (PRIORITÉ 3 - fallback)
                 if tp_progress_pct >= 30.0:
                     
                     # 📈 CALCUL DU NIVEAU DE SL PROGRESSIF - TOUJOURS POSITIF
@@ -1586,6 +1755,196 @@ class M5PullbackBot:
                         safe_log(f"❌ Exception trailing stop {ticket}: {str(e)}")
                         safe_log(f"   🔧 Requête: SL {new_sl_progressive:.5f}, TP {mt5_position.tp:.5f}")
             
+    def manage_dynamic_take_profit(self):
+        """
+        🎯 TP DYNAMIQUE - AJUSTEMENT EN TEMPS RÉEL DU TAKE PROFIT
+        ==========================================================
+        
+        Système expert qui adapte le TP pendant que le trade est ouvert :
+        
+        📈 SCÉNARIO 1 : MARCHÉ EN ACCÉLÉRATION (On éloigne le TP)
+        - Condition : Force de tendance > 95% (marché TRÈS puissant)
+        - Action : Étend le TP de 30% supplémentaire pour capturer plus de gains
+        - Sécurité : Seulement si position déjà > 40% du chemin vers TP
+        
+        📉 SCÉNARIO 2 : MARCHÉ EN ESSOUFFLEMENT (On sécurise)
+        - Condition : RSI < 60 (perte de momentum)
+        - Action : Active un trailing stop AGRESSIF (80% du profit)
+        - Objectif : Verrouiller les gains avant retournement potentiel
+        
+        💡 PHILOSOPHIE : Fire-and-Forget → Active Management
+        """
+        if not ENABLE_DYNAMIC_TP:
+            return
+        
+        if not self.open_positions:
+            return
+        
+        # 📊 Analyser la force ACTUELLE du marché (temps réel)
+        current_data = self.get_ultra_fast_data(250)
+        if not current_data:
+            return
+        
+        current_trend, current_strength, current_indicators = self.detect_ultra_trend(current_data)
+        
+        # Récupération positions MT5
+        mt5_positions = mt5.positions_get(symbol=self.symbol)
+        if not mt5_positions:
+            return
+        
+        current_price = mt5.symbol_info_tick(self.symbol)
+        if not current_price:
+            return
+        
+        # Initialiser le tracking des forces à l'ouverture (si nécessaire)
+        if not hasattr(self, '_opening_strengths'):
+            self._opening_strengths = {}  # {ticket: strength_at_opening}
+        
+        # Tracking des TP déjà modifiés (éviter modifications répétées)
+        if not hasattr(self, '_dynamic_tp_modified'):
+            self._dynamic_tp_modified = set()
+        
+        for mt5_position in mt5_positions:
+            ticket = mt5_position.ticket
+            
+            # 🔵 Gestion uniquement des positions BUY profitables
+            if mt5_position.type != mt5.POSITION_TYPE_BUY or mt5_position.profit <= 0:
+                continue
+            
+            # Stocker la force à l'ouverture (si première fois qu'on voit ce ticket)
+            if ticket not in self._opening_strengths:
+                self._opening_strengths[ticket] = current_strength
+            
+            opening_strength = self._opening_strengths[ticket]
+            entry_price = mt5_position.price_open
+            current_tp = mt5_position.tp
+            
+            # Calcul progression vers TP
+            symbol_info = mt5.symbol_info(self.symbol)
+            if not symbol_info:
+                continue
+            
+            tp_distance = current_tp - entry_price
+            current_profit_distance = current_price.bid - entry_price
+            
+            if tp_distance > 0:
+                tp_progress_pct = (current_profit_distance / tp_distance) * 100
+            else:
+                continue  # TP invalide
+            
+            # ═══════════════════════════════════════════════════════════
+            # 🚀 RÈGLE 1 : ÉLOIGNER LE TP SI LE MARCHÉ ACCÉLÈRE
+            # ═══════════════════════════════════════════════════════════
+            if (current_strength >= DYNAMIC_TP_STRENGTH_THRESHOLD and 
+                tp_progress_pct >= DYNAMIC_TP_MIN_PROFIT_PERCENT and
+                ticket not in self._dynamic_tp_modified):
+                
+                # Calcul du nouveau TP étendu
+                current_tp_distance = current_tp - entry_price
+                new_tp_distance = current_tp_distance * DYNAMIC_TP_EXTENSION_MULTIPLIER
+                new_tp = entry_price + new_tp_distance
+                
+                # Vérifier amélioration significative (min 10 points)
+                tp_improvement = new_tp - current_tp
+                if tp_improvement >= DYNAMIC_TP_MIN_IMPROVEMENT:
+                    
+                    safe_log(f"🚀 TP DYNAMIQUE - ACCÉLÉRATION MARCHÉ!")
+                    safe_log(f"   🎫 Ticket: {ticket}")
+                    safe_log(f"   📊 Force actuelle: {current_strength:.1f}% (seuil: {DYNAMIC_TP_STRENGTH_THRESHOLD}%)")
+                    safe_log(f"   💪 Force à l'ouverture: {opening_strength:.1f}%")
+                    safe_log(f"   📈 Gain de force: +{current_strength - opening_strength:.1f}%")
+                    safe_log(f"   📊 Progression: {tp_progress_pct:.1f}% du TP")
+                    safe_log(f"   🎯 TP actuel: {current_tp:.5f}")
+                    safe_log(f"   🎯 Nouveau TP: {new_tp:.5f} (+{tp_improvement*10000:.1f} pips)")
+                    safe_log(f"   💡 Extension: +{(DYNAMIC_TP_EXTENSION_MULTIPLIER - 1)*100:.0f}% pour capturer l'accélération")
+                    
+                    # Modification du TP sur MT5
+                    request = {
+                        "action": mt5.TRADE_ACTION_SLTP,
+                        "symbol": self.symbol,
+                        "position": ticket,
+                        "sl": mt5_position.sl,
+                        "tp": new_tp,
+                        "magic": mt5_position.magic,
+                        "comment": "DynamicTP-Extend"
+                    }
+                    
+                    try:
+                        result = mt5.order_send(request)
+                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                            safe_log(f"✅ TP ÉTENDU AVEC SUCCÈS!")
+                            safe_log(f"   🎯 Potentiel de gain augmenté de {tp_improvement * 10000:.1f} pips")
+                            self._dynamic_tp_modified.add(ticket)
+                        else:
+                            error_msg = getattr(result, 'comment', "Erreur inconnue") if result else "Aucune réponse"
+                            safe_log(f"❌ Échec extension TP: {error_msg}")
+                    except Exception as e:
+                        safe_log(f"❌ Erreur modification TP dynamique: {e}")
+            
+            # ═══════════════════════════════════════════════════════════
+            # 📉 RÈGLE 2 : SÉCURISER SI LE MARCHÉ S'ESSOUFFLE
+            # ═══════════════════════════════════════════════════════════
+            # (On ne rapproche PAS le TP, on rend le trailing stop plus agressif)
+            
+            current_rsi = current_indicators.get('rsi', 70)
+            
+            if (current_rsi < DYNAMIC_TP_RSI_WEAKNESS and 
+                tp_progress_pct >= 50.0 and  # Seulement si bon profit déjà
+                mt5_position.sl > 0):  # SL déjà actif
+                
+                # Calcul d'un SL ultra-agressif (80% du profit actuel)
+                aggressive_sl_ratio = 0.80
+                aggressive_sl = entry_price + (current_profit_distance * aggressive_sl_ratio)
+                
+                current_sl = mt5_position.sl
+                
+                # Seulement si ce nouveau SL est meilleur que l'actuel
+                if aggressive_sl > current_sl and aggressive_sl > entry_price:
+                    
+                    # Vérifier distances minimales MT5
+                    tick_info = mt5.symbol_info_tick(self.symbol)
+                    if tick_info:
+                        stops_level = getattr(symbol_info, 'trade_stops_level', 10)
+                        min_distance = max(stops_level * symbol_info.point, 10 * symbol_info.point)
+                        spread = symbol_info.spread * symbol_info.point
+                        safety_buffer = max(min_distance * 2, 20 * symbol_info.point) + spread
+                        max_allowed_sl = tick_info.bid - safety_buffer
+                        
+                        if aggressive_sl < max_allowed_sl:
+                            
+                            safe_log(f"📉 TP DYNAMIQUE - ESSOUFFLEMENT DÉTECTÉ!")
+                            safe_log(f"   🎫 Ticket: {ticket}")
+                            safe_log(f"   📊 RSI actuel: {current_rsi:.1f} (seuil: {DYNAMIC_TP_RSI_WEAKNESS})")
+                            safe_log(f"   ⚠️ Perte de momentum détectée")
+                            safe_log(f"   📊 Progression: {tp_progress_pct:.1f}% du TP")
+                            safe_log(f"   🛡️ SL actuel: {current_sl:.5f}")
+                            safe_log(f"   🛡️ Nouveau SL agressif: {aggressive_sl:.5f} (80% du profit)")
+                            
+                            guaranteed_profit_pips = (aggressive_sl - entry_price) / symbol_info.point / 10
+                            safe_log(f"   💰 Profit garanti: +{guaranteed_profit_pips:.1f} pips")
+                            
+                            # Modification du SL agressif
+                            request = {
+                                "action": mt5.TRADE_ACTION_SLTP,
+                                "symbol": self.symbol,
+                                "position": ticket,
+                                "sl": aggressive_sl,
+                                "tp": mt5_position.tp,
+                                "magic": mt5_position.magic,
+                                "comment": "DynamicTP-Secure"
+                            }
+                            
+                            try:
+                                result = mt5.order_send(request)
+                                if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                    safe_log(f"✅ SÉCURISATION AGRESSIVE ACTIVÉE!")
+                                    safe_log(f"   💰 80% du gain verrouillé contre retournement")
+                                else:
+                                    error_msg = getattr(result, 'comment', "Erreur inconnue") if result else "Aucune réponse"
+                                    safe_log(f"⚠️ Échec sécurisation: {error_msg}")
+                            except Exception as e:
+                                safe_log(f"❌ Erreur SL agressif: {e}")
+    
     def close_positive_positions(self):
         """🟢 FERME AUTOMATIQUEMENT TOUTES LES POSITIONS POSITIVES"""
         if not ENABLE_REAL_TRADING:
@@ -2696,16 +3055,16 @@ class M5PullbackBot:
             # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE
             # 🟢 BUY: Risque adaptatif selon la force (logique normale)
             if trend_strength >= 100:
-                risk_percent = 12  # 🚀 Risque maximum - Certitude absolue
+                risk_percent = 20  # 🚀 Risque maximum - Certitude absolue
                 risk_level = "MAXIMUM"
             elif trend_strength >= 95.0:
-                risk_percent = 6  # 🎯 Risque élevé - Très forte certitude
+                risk_percent = 12  # 🎯 Risque élevé - Très forte certitude
                 risk_level = "ÉLEVÉ"
             elif trend_strength >= 90.0:
-                risk_percent = 3.5  # ⚡ Risque augmenté - Forte certitude
+                risk_percent = 7  # ⚡ Risque augmenté - Forte certitude
                 risk_level = "AUGMENTÉ"
             elif trend_strength >= 80.0:
-                risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
+                risk_percent = 5  # 📊 Risque standard - Certitude modérée
                 risk_level = "STANDARD"
             else:
                 risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
@@ -3323,7 +3682,21 @@ class M5PullbackBot:
         safe_log(f"♾️ Session sans limite de temps")
         safe_log(f"⚡ Analyse toutes les {ANALYSIS_INTERVAL} secondes (haute fréquence)")
         safe_log(f"🎯 TP/SL: Adaptatifs selon ATR | Breakeven progressif")
+        
+        # 🎯 Affichage des nouvelles fonctionnalités avancées
+        if ENABLE_SCALING_OUT or ENABLE_STRUCTURAL_TRAILING or ENABLE_DYNAMIC_TP:
+            safe_log(f"\n🚀 FONCTIONNALITÉS EXPERT ACTIVÉES:")
+            if ENABLE_SCALING_OUT:
+                safe_log(f"   💰 Scaling Out: Ferme {SCALING_OUT_CLOSE_PERCENT}% à {SCALING_OUT_TP_PERCENT}% du TP")
+            if ENABLE_STRUCTURAL_TRAILING:
+                safe_log(f"   📊 Trailing Structurel: Suit les {STRUCTURAL_TRAILING_LOOKBACK} dernières bougies")
+            if ENABLE_DYNAMIC_TP:
+                safe_log(f"   🎯 TP Dynamique: Ajuste le TP en temps réel selon la force du marché")
+                safe_log(f"      📈 Accélération (>{DYNAMIC_TP_STRENGTH_THRESHOLD}%): Éloigne TP +{(DYNAMIC_TP_EXTENSION_MULTIPLIER-1)*100:.0f}%")
+                safe_log(f"      📉 Essoufflement (RSI<{DYNAMIC_TP_RSI_WEAKNESS}): SL agressif à 80% profit")
+        
         safe_log(f"⏹️ Arrêt: Ctrl+C")
+        safe_log("="*60)
         
         self.is_trading = True
         cycle_count = 0
@@ -3339,6 +3712,9 @@ class M5PullbackBot:
                 # 🔒 ANALYSE BREAKEVEN - Toutes les secondes (priorité max)
                 self.sync_positions_with_mt5()
                 self.check_and_move_sl_to_breakeven()
+                
+                # 🎯 TP DYNAMIQUE - Ajustement en temps réel (priorité haute)
+                self.manage_dynamic_take_profit()
                 
                 # 📊 ANALYSE DU MARCHÉ - Toutes les 10 secondes seulement
                 if last_market_analysis >= ANALYSIS_INTERVAL:
@@ -3401,190 +3777,7 @@ class M5PullbackBot:
             safe_log(f"   ❌ DIFFICILE. Revoir la stratégie")
         
         safe_log(f"\n🔥 Session ultra scalping terminée!")
-    
-    def analyze_3_weeks_performance(self, total_profit_3_weeks=121.74):
-        """
-        🔍 ANALYSE DÉTAILLÉE DES PERFORMANCES SUR 3 SEMAINES
-        ===================================================
-        Analyse complète pour évaluer l'efficacité du bot sur 121,74€ de profit
-        """
-        safe_log(f"\n" + "="*80)
-        safe_log("📊 ANALYSE APPROFONDIE - PERFORMANCE 3 SEMAINES")
-        safe_log("="*80)
-        
-        # 1. MÉTRIQUES DE BASE
-        try:
-            account_info = mt5.account_info()
-            if account_info:
-                current_balance = account_info.balance
-                safe_log(f"\n💰 BILAN FINANCIER:")
-                safe_log(f"   💵 Balance actuelle: {current_balance:.2f}€")
-                safe_log(f"   📈 Profit total 3 semaines: +{total_profit_3_weeks:.2f}€")
-                safe_log(f"   📊 ROI estimé: {(total_profit_3_weeks / (current_balance - total_profit_3_weeks)) * 100:.2f}%")
-                safe_log(f"   💰 Profit moyen/semaine: {total_profit_3_weeks / 3:.2f}€")
-                safe_log(f"   📈 Profit moyen/jour: {total_profit_3_weeks / 21:.2f}€ (21 jours ouvrés)")
-        except:
-            pass
-        
-        # 2. DONNÉES À COLLECTER POUR ANALYSE COMPLÈTE
-        safe_log(f"\n🔍 DONNÉES NÉCESSAIRES POUR ANALYSE APPROFONDIE:")
-        safe_log(f"\n   📊 TRADING ACTIVITY:")
-        safe_log(f"      ▸ Nombre total de trades sur 3 semaines")
-        safe_log(f"      ▸ Nombre de trades gagnants vs perdants")
-        safe_log(f"      ▸ Win rate global")
-        safe_log(f"      ▸ Profit moyen par trade gagnant")
-        safe_log(f"      ▸ Perte moyenne par trade perdant")
-        safe_log(f"      ▸ Ratio Risk/Reward")
-        
-        safe_log(f"\n   ⏰ TEMPORALITÉ:")
-        safe_log(f"      ▸ Heures d'activité les plus profitables")
-        safe_log(f"      ▸ Jours de la semaine les plus performants")
-        safe_log(f"      ▸ Durée moyenne des trades")
-        safe_log(f"      ▸ Trades par jour en moyenne")
-        
-        safe_log(f"\n   🎯 PRÉCISION STRATÉGIQUE:")
-        safe_log(f"      ▸ Performance par condition de marché (BULLISH/BEARISH)")
-        safe_log(f"      ▸ Efficacité des signaux d'entrée (RSI, EMA)")
-        safe_log(f"      ▸ Taux de réussite du système de breakeven")
-        safe_log(f"      ▸ Activations du système de sécurité (-5%)")
-        
-        safe_log(f"\n   📈 DRAWDOWN ET RISQUE:")
-        safe_log(f"      ▸ Plus grosse perte journalière")
-        safe_log(f"      ▸ Plus grosse série de pertes consécutives")
-        safe_log(f"      ▸ Drawdown maximum")
-        safe_log(f"      ▸ Temps de récupération moyen après perte")
-        
-        safe_log(f"\n   💹 OPTIMISATION:")
-        safe_log(f"      ▸ Lots moyens utilisés vs balance")
-        safe_log(f"      ▸ Efficacité des TP (adaptatifs ATR)")
-        safe_log(f"      ▸ Positions simultanées optimales")
-        safe_log(f"      ▸ Fréquence de trading optimale")
-        
-        # 3. QUESTIONS D'ANALYSE CRITIQUE
-        safe_log(f"\n❓ QUESTIONS D'ANALYSE CRITIQUE:")
-        safe_log(f"\n   1️⃣ CONSISTANCE:")
-        safe_log(f"      • Le profit est-il régulier ou dû à quelques gros gains ?")
-        safe_log(f"      • Y a-t-il des périodes de sous-performance ?")
-        safe_log(f"      • La stratégie est-elle stable dans différentes conditions ?")
-        
-        safe_log(f"\n   2️⃣ ROBUSTESSE:")
-        safe_log(f"      • Comment le bot gère-t-il les périodes volatiles ?")
-        safe_log(f"      • Le système de sécurité (-5%) a-t-il été testé ?")
-        safe_log(f"      • Résistance aux séries de pertes ?")
-        
-        safe_log(f"\n   3️⃣ SCALABILITÉ:")
-        safe_log(f"      • Performance avec des lots plus importants ?")
-        safe_log(f"      • Impact de l'augmentation de capital ?")
-        safe_log(f"      • Limite de la stratégie ?")
-        
-        # 4. COLLECTE DE DONNÉES MT5
-        safe_log(f"\n🔍 COLLECTE AUTOMATIQUE DES DONNÉES MT5:")
-        self.collect_mt5_historical_data()
-        
-        safe_log(f"\n✅ BILAN PRÉLIMINAIRE:")
-        safe_log(f"   🎯 Résultat: +{total_profit_3_weeks:.2f}€ en 3 semaines = EXCELLENT")
-        safe_log(f"   📈 Consistance apparente: À confirmer avec données historiques")
-        safe_log(f"   🛡️ Sécurité: Système de protection opérationnel")
-        safe_log(f"   ⚡ Potentiel: Stratégie prometteuse à analyser en détail")
-        
-        safe_log("="*80)
-    
-    def collect_mt5_historical_data(self):
-        """Collecte les données historiques MT5 pour analyse des 3 semaines"""
-        try:
-            safe_log(f"\n📋 COLLECTE DONNÉES HISTORIQUES MT5...")
-            
-            # Période de 3 semaines (21 jours)
-            from_date = datetime.now() - timedelta(days=21)
-            to_date = datetime.now()
-            
-            # Récupération historique des deals
-            deals = mt5.history_deals_get(from_date, to_date, symbol=self.symbol)
-            
-            if deals and len(deals) > 0:
-                safe_log(f"   📊 {len(deals)} deals trouvés sur 3 semaines")
-                
-                # Analyse des deals
-                winning_deals = [deal for deal in deals if deal.profit > 0]
-                losing_deals = [deal for deal in deals if deal.profit < 0]
-                
-                total_profit_mt5 = sum(deal.profit for deal in deals)
-                avg_winning_trade = sum(deal.profit for deal in winning_deals) / len(winning_deals) if winning_deals else 0
-                avg_losing_trade = sum(deal.profit for deal in losing_deals) / len(losing_deals) if losing_deals else 0
-                
-                win_rate_mt5 = (len(winning_deals) / len(deals)) * 100 if deals else 0
-                
-                safe_log(f"\n📈 STATISTIQUES MT5 (3 semaines):")
-                safe_log(f"   🔢 Total deals: {len(deals)}")
-                safe_log(f"   ✅ Deals gagnants: {len(winning_deals)} ({win_rate_mt5:.1f}%)")
-                safe_log(f"   ❌ Deals perdants: {len(losing_deals)}")
-                safe_log(f"   💰 Profit total MT5: {total_profit_mt5:.2f}€")
-                safe_log(f"   📊 Profit moyen/trade gagnant: {avg_winning_trade:.2f}€")
-                safe_log(f"   📉 Perte moyenne/trade perdant: {avg_losing_trade:.2f}€")
-                
-                if avg_losing_trade != 0:
-                    risk_reward = abs(avg_winning_trade / avg_losing_trade)
-                    safe_log(f"   ⚖️ Ratio Risk/Reward: 1:{risk_reward:.2f}")
-                
-                # Analyse temporelle
-                safe_log(f"\n⏰ ANALYSE TEMPORELLE:")
-                hours_stats = {}
-                days_stats = {}
-                
-                for deal in deals:
-                    deal_time = datetime.fromtimestamp(deal.time)
-                    hour = deal_time.hour
-                    day = deal_time.strftime('%A')
-                    
-                    if hour not in hours_stats:
-                        hours_stats[hour] = {'count': 0, 'profit': 0}
-                    hours_stats[hour]['count'] += 1
-                    hours_stats[hour]['profit'] += deal.profit
-                    
-                    if day not in days_stats:
-                        days_stats[day] = {'count': 0, 'profit': 0}
-                    days_stats[day]['count'] += 1
-                    days_stats[day]['profit'] += deal.profit
-                
-                # Meilleure heure
-                if hours_stats:
-                    best_hour = max(hours_stats.keys(), key=lambda h: hours_stats[h]['profit'])
-                    safe_log(f"   🕐 Heure la plus profitable: {best_hour}h ({hours_stats[best_hour]['profit']:.2f}€)")
-                
-                # Meilleur jour
-                if days_stats:
-                    best_day = max(days_stats.keys(), key=lambda d: days_stats[d]['profit'])
-                    safe_log(f"   📅 Jour le plus profitable: {best_day} ({days_stats[best_day]['profit']:.2f}€)")
-                
-            else:
-                safe_log(f"   ⚠️ Aucun deal trouvé dans l'historique")
-                
-            # Récupération historique des ordres
-            orders = mt5.history_orders_get(from_date, to_date, symbol=self.symbol)
-            if orders:
-                safe_log(f"   📋 {len(orders)} ordres trouvés")
-            
-        except Exception as e:
-            safe_log(f"   ❌ Erreur collecte données: {e}")
-    
-    def generate_performance_recommendations(self):
-        """Génère des recommandations d'optimisation basées sur l'analyse"""
-        safe_log(f"\n💡 RECOMMANDATIONS D'OPTIMISATION:")
-        safe_log(f"\n   🔧 PARAMÈTRES TECHNIQUES:")
-        safe_log(f"      • TP actuel: Adaptatif selon ATR - Optimise automatiquement selon volatilité")
-        safe_log(f"      • Lot adaptatif: Optimiser selon equity")
-        safe_log(f"      • Fréquence: Analyser pics d'activité")
-        
-        safe_log(f"\n   📊 GESTION RISQUE:")
-        safe_log(f"      • Seuil sécurité: -5% semble approprié")
-        safe_log(f"      • Positions max: Évaluer selon volatilité")
-        safe_log(f"      • Horaires: 7h30-21h30 optimisé pour profitabilité")
-        
-        safe_log(f"\n   📈 AMÉLIORATION STRATÉGIE:")
-        safe_log(f"      • Conditions d'entrée: Affiner signaux RSI")
-        safe_log(f"      • Breakeven: Système progressif optimisé")
-        safe_log(f"      • Sortie: Améliorer détection de retournement")
-
+       
     def shutdown(self):
         """Arrêt propre du bot ultra scalping"""
         self.is_trading = False
