@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 BOT DE TRADING PROFESSIONNEL M5 - STRATÉGIE "PULLBACK SUR TENDANCE"
 ========================================================
@@ -27,23 +27,14 @@ Date: 03 octobre 2025
 """
 
 import MetaTrader5 as mt5
-import numpy as np
 from datetime import datetime, timedelta
 import sys
 import io
 import time
-import random
-import traceback
-import os
 import time
-import random
-import traceback
 import io
 import sys
-import os
 import time
-import random
-import traceback
 
 # Configuration UTF-8 pour Windows
 import io
@@ -108,15 +99,12 @@ RSI_PERIOD = 14                 # RSI standard (14 périodes)
 # 🎯 STRATÉGIE RÉVISÉE : TP PETITS + SL GRANDS + LOTS ÉLEVÉS
 ATR_PULLBACK_MULTIPLIER = 3.0   # Distance max à l'EMA 50 (3.0x ATR - zone pullback plus proche)
 ATR_SL_MULTIPLIER = 2.5         # � SL BUY : 2.5x ATR (standard)
-ATR_SL_MULTIPLIER_SELL = 5.0    # 🔴 SL SELL : 5.0x ATR (plus de marge pour les shorts)
 TP_MAX_POINTS = 200             # 🎯 TP maximum : 200 points (20 pips) - PLAFONNÉ
 RISK_MULTIPLIER = 1.5           # 💰 Multiplicateur de risque augmenté (lots plus élevés)
 
 # 🎯 ZONES RSI POUR PULLBACK
 RSI_BUY_MIN = 35               # RSI minimum pour BUY (momentum sain)
 RSI_BUY_MAX = 60               # RSI maximum pour BUY (pas de surachat excessif)
-RSI_SELL_MIN = 45              # RSI minimum pour SELL (faiblesse confirmée)
-RSI_SELL_MAX = 60              # RSI maximum pour SELL (rebond s'essoufle)
 
 # 🎯 PARAMÈTRES M5 PULLBACK (Qualité > Quantité)
 # COOLDOWN : 5 minutes entre les trades pour éviter le sur-trading
@@ -181,7 +169,6 @@ class M5PullbackBot:
         }
         self.config = configs.get(config_name, BALANCED_CONFIG)
         safe_log(f"🎮 Configuration: {config_name}")
-        safe_log(f"📊 RSI SELL > {self.config['RSI_OVERBOUGHT']}")
         safe_log(f"📊 RSI BUY < {self.config['RSI_OVERSOLD']}")
         
         # 🎯 NOUVEAU FILTRE ULTRA-STRICT
@@ -213,9 +200,8 @@ class M5PullbackBot:
             'security_grace_duration': 45  # Durée grâce en minutes (45 min sans contrôle)
         }
         
-        # 🕐 CONTRÔLE FRÉQUENCE DES TRADES - Séparé pour BUY et SELL
+        # 🕐 CONTRÔLE FRÉQUENCE DES TRADES
         self.last_buy_timestamp = None  # Pas de timestamp initial - premier trade libre
-        self.last_sell_timestamp = None  # Pas de timestamp initial - premier trade libre
         
         # 🚀 MODE TURBO - Trading ultra-rapide lors de signaux très forts
         self.turbo_mode_active = False  # Mode turbo désactivé par défaut
@@ -253,7 +239,6 @@ class M5PullbackBot:
         # État des positions
         self.open_positions = []
         self.position_count = 0
-        self.sell_positions_count = 0  # Compteur spécifique pour les SELL
         self.buy_positions_count = 0   # Compteur spécifique pour les BUY
         
         # Détection de tendance
@@ -287,18 +272,14 @@ class M5PullbackBot:
             
             if mt5_positions:
                 # Reset des compteurs
-                self.sell_positions_count = 0
                 self.buy_positions_count = 0
                 
                 # Comptage des positions par type
                 for position in mt5_positions:
-                    if position.type == mt5.POSITION_TYPE_SELL:
-                        self.sell_positions_count += 1
-                    elif position.type == mt5.POSITION_TYPE_BUY:
+                    if position.type == mt5.POSITION_TYPE_BUY:
                         self.buy_positions_count += 1
                 
                 safe_log(f"🔄 Synchronisation positions MT5:")
-                safe_log(f"   📊 SELL en cours: {self.sell_positions_count}")
                 safe_log(f"   📊 BUY en cours: {self.buy_positions_count}")
                 safe_log(f"   📊 Total positions: {len(mt5_positions)}")
                 
@@ -308,7 +289,7 @@ class M5PullbackBot:
                     position_info = {
                         'ticket': position.ticket,
                         'open_time': datetime.fromtimestamp(position.time),  # Conversion timestamp MT5
-                        'type': 'SELL' if position.type == mt5.POSITION_TYPE_SELL else 'BUY',
+                        'type': 'BUY',
                         'volume': position.volume,
                         'open_price': position.price_open,
                         'tp': position.tp if position.tp > 0 else None,
@@ -318,14 +299,12 @@ class M5PullbackBot:
                 
             else:
                 safe_log("📊 Aucune position ouverte sur MT5")
-                self.sell_positions_count = 0
                 self.buy_positions_count = 0
                 self.open_positions = []
                 
         except Exception as e:
             safe_log(f"⚠️ Erreur synchronisation compteurs: {e}")
             # En cas d'erreur, on garde les valeurs par défaut
-            self.sell_positions_count = 0
             self.buy_positions_count = 0
             self.open_positions = []
     
@@ -449,7 +428,6 @@ class M5PullbackBot:
 
             # 📊 CALCUL DU RISQUE TOTAL ESTIMÉ
             # Risque moyen par position BUY: ~5% (entre 2.5% et 6%)
-            # Risque fixe SELL: 3%
             risque_moyen_par_position = 0.04  # 4% moyen (conservateur)
             risque_total_max_pct = risque_moyen_par_position * max_positions_final * 100
             risque_total_max_eur = equity * risque_moyen_par_position * max_positions_final
@@ -929,7 +907,7 @@ class M5PullbackBot:
                     safe_log("🚨 COMPTE RÉEL CONFIRMÉ - Trading avec argent réel")
             
             # Type d'ordre
-            order_type = mt5.ORDER_TYPE_SELL if trade_type == "SELL" else mt5.ORDER_TYPE_BUY
+            order_type = mt5.ORDER_TYPE_BUY
             
             # Volume (lot size adaptatif basé sur l'EQUITY RÉELLE, l'ATR et la FORCE de tendance)
             # Calcul de la distance SL basée sur l'ATR pour le lot adaptatif
@@ -968,12 +946,9 @@ class M5PullbackBot:
                 safe_log("❌ Impossible de récupérer prix")
                 return False
                 
-            if trade_type == "SELL":
-                price = tick_info.bid
-            else:
-                price = tick_info.ask
+            price = tick_info.ask
             
-            safe_log(f"💰 Prix {trade_type}: {price} | Bid: {tick_info.bid} | Ask: {tick_info.ask}")
+            safe_log(f"💰 Prix {trade_type}: {price} | Ask: {tick_info.ask}")
             
             # ✅ UTILISATION DIRECTE DES TP/SL ADAPTATIFS CALCULÉS PAR execute_m5_trade
             # Plus de calcul fixe - on utilise les valeurs ATR adaptatives passées en argument
@@ -1054,10 +1029,7 @@ class M5PullbackBot:
             self.stats['last_trade_time'] = datetime.now()
             
             # Mise à jour compteurs par type
-            if trade_type == 'SELL':
-                self.sell_positions_count += 1
-            else:
-                self.buy_positions_count += 1
+            self.buy_positions_count += 1
             
             return True
             
@@ -1107,7 +1079,7 @@ class M5PullbackBot:
         for mt5_pos in mt5_positions:
             try:
                 profit = mt5_pos.profit
-                position_type = "BUY" if mt5_pos.type == 0 else "SELL"
+                position_type = "BUY"
                 ticket = mt5_pos.ticket
                 
                 # ✅ Condition 1: Position en profit ET tendance inversée
@@ -1118,9 +1090,6 @@ class M5PullbackBot:
                     if position_type == "BUY" and trend_direction == "BEARISH":
                         should_close = True
                         close_reason = "BUY profitable + tendance BEARISH"
-                    elif position_type == "SELL" and trend_direction == "BULLISH":
-                        should_close = True
-                        close_reason = "SELL profitable + tendance BULLISH"
                     
                     if should_close:
                         safe_log(f"🧠 GESTION INTELLIGENTE: {close_reason}")
@@ -1259,10 +1228,7 @@ class M5PullbackBot:
                     safe_log(f"⚠️ Position fermée (profit non détecté): Ticket {position['ticket']} | Durée: {duration_str}")
                 
                 # Mise à jour des compteurs par type
-                if position['type'] == 'SELL':
-                    self.sell_positions_count = max(0, self.sell_positions_count - 1)
-                else:
-                    self.buy_positions_count = max(0, self.buy_positions_count - 1)
+                self.buy_positions_count = max(0, self.buy_positions_count - 1)
                 positions_to_remove.append(i)
         
         # Suppression en ordre inverse
@@ -1620,172 +1586,6 @@ class M5PullbackBot:
                         safe_log(f"❌ Exception trailing stop {ticket}: {str(e)}")
                         safe_log(f"   🔧 Requête: SL {new_sl_progressive:.5f}, TP {mt5_position.tp:.5f}")
             
-            # 🔴 TRAILING STOP POUR POSITIONS SELL (similaire mais inversé)
-            else:
-                # Même logique que BUY mais inversée pour SELL
-                symbol_info = mt5.symbol_info(self.symbol)
-                if symbol_info:
-                    current_profit_distance = entry_price - current_price.ask  # Inversé pour SELL
-                    tp_distance = entry_price - mt5_position.tp if mt5_position.tp > 0 else (25 * 0.1)
-                else:
-                    current_profit_distance = entry_price - current_price.ask
-                    tp_distance = 25 * 0.1
-                
-                # Calcul du pourcentage de progression vers le TP
-                if tp_distance > 0:
-                    tp_progress_pct = (current_profit_distance / tp_distance) * 100
-                else:
-                    tp_progress_pct = 0
-
-                # Trailing stop pour SELL (même logique que BUY mais inversée)
-                if tp_progress_pct >= 30.0:
-                    
-                    # 📈 CALCUL DU NIVEAU DE SL PROGRESSIF - TOUJOURS POSITIF (SELL)
-                    if tp_progress_pct >= 90.0:
-                        sl_profit_ratio = 0.75
-                        phase = "QUASI-TP (75% profit)"
-                    elif tp_progress_pct >= 75.0:
-                        sl_profit_ratio = 0.50
-                        phase = "MOMENTUM (50% profit)"
-                    elif tp_progress_pct >= 50.0:
-                        sl_profit_ratio = 0.25
-                        phase = "PROGRESSION (25% profit)"
-                    else:
-                        # Premier niveau (30-50%) → 10% du profit sécurisé (simple)
-                        sl_profit_ratio = 0.10
-                        phase = "SÉCURISÉ (10% profit)"
-                    
-                    # Pour SELL : Calcul du SL selon la phase
-                    target_profit_distance = tp_distance * sl_profit_ratio
-                    new_sl_progressive = entry_price - target_profit_distance
-                    
-                    # Ne jamais reculer le SL (pour SELL, cela signifie ne jamais l'augmenter)
-                    
-                    # Ne jamais reculer le SL (pour SELL, cela signifie ne jamais l'augmenter)
-                    current_sl = mt5_position.sl if mt5_position.sl > 0 else entry_price
-                    if new_sl_progressive >= current_sl:
-                        continue
-                    
-                    # Mêmes vérifications de sécurité que pour BUY...
-                    fresh_position = mt5.positions_get(ticket=ticket)
-                    if not fresh_position or len(fresh_position) == 0:
-                        continue
-                    
-                    current_profit = fresh_position[0].profit
-                    if current_profit <= 0:
-                        continue
-                    
-                    sl_tolerance = 0.00005
-                    if abs(mt5_position.sl - new_sl_progressive) < sl_tolerance:
-                        continue
-                    
-                    # SÉCURITÉS MT5 pour positions SELL
-                    tick_info = mt5.symbol_info_tick(self.symbol)
-                    if not symbol_info or not tick_info:
-                        safe_log(f"⚠️ Impossible d'obtenir les infos symbol SELL pour {ticket}")
-                        continue
-                    
-                    current_price_ask = tick_info.ask
-                    current_price_bid = tick_info.bid
-                    
-                    # Pour SELL : SL doit être supérieur au prix ASK actuel
-                    stops_level = getattr(symbol_info, 'trade_stops_level', 10)
-                    min_distance = max(stops_level * symbol_info.point, 10 * symbol_info.point)
-                    spread = symbol_info.spread * symbol_info.point
-                    safety_buffer = max(min_distance * 2, 20 * symbol_info.point) + spread
-                    
-                    min_allowed_sl = current_price_ask + safety_buffer
-                    
-                    # Vérifier que le nouveau SL respecte les contraintes MT5
-                    if new_sl_progressive <= min_allowed_sl:
-                        adjusted_sl = min_allowed_sl
-                        safe_log(f"   🔧 SL SELL ajusté: {new_sl_progressive:.5f} → {adjusted_sl:.5f} (sécurité MT5)")
-                        
-                        # Pour SELL, SL plus haut = moins avantageux
-                        if adjusted_sl >= current_sl:
-                            safe_log(f"   ⚠️ SL ajusté trop haut ({adjusted_sl:.5f} >= {current_sl:.5f}), maintien SL actuel")
-                            continue
-                        
-                        new_sl_progressive = adjusted_sl
-                    
-                    # Validation finale pour SELL
-                    if new_sl_progressive <= current_price_ask:
-                        safe_log(f"   ❌ SL SELL invalide: {new_sl_progressive:.5f} <= prix ASK {current_price_ask:.5f}")
-                        continue
-                    
-                    # 📊 LOGS DÉTAILLÉS SELL (avant modification)
-                    safe_log(f"   📊 Progression TP SELL: {tp_progress_pct:.1f}% (seuil: 30%)")
-                    safe_log(f"   💰 Profit actuel: +{current_profit_distance:.3f} | TP cible: {tp_distance:.3f}")
-                    safe_log(f"   🔄 SL: {current_sl:.5f} → {new_sl_progressive:.5f}")
-                    
-                    # Calcul du profit garanti SELL (inversé par rapport à BUY)
-                    guaranteed_profit_distance = entry_price - new_sl_progressive  # Pour SELL: profit = entrée - SL
-                    guaranteed_profit_pips = guaranteed_profit_distance / symbol_info.point / 10
-                    safe_log(f"   🎯 SL progressif SELL: {new_sl_progressive:.5f}")
-                    safe_log(f"   💰 Profit garanti SELL: +{guaranteed_profit_pips:.1f} pips")
-                    
-                    # Modification du SL pour SELL (même requête que BUY)
-                    request = {
-                        "action": mt5.TRADE_ACTION_SLTP,
-                        "symbol": self.symbol,
-                        "position": ticket,
-                        "sl": new_sl_progressive,
-                        "tp": mt5_position.tp,
-                        "magic": mt5_position.magic,
-                        "comment": f"TrailingStop-SELL-{phase[:8]}"
-                    }
-                    
-                    try:
-                        result = mt5.order_send(request)
-                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-                            safe_log(f"🔒 TRAILING STOP SELL ACTIVÉ! Ticket {ticket}")
-                            safe_log(f"   📈 Phase: {phase}")
-                            safe_log(f"   💰 Progression: {tp_progress_pct:.1f}%")
-                            safe_log(f"   🛡️ SL sécurisé: {new_sl_progressive:.5f}")
-                            safe_log(f"   ✅ Profit minimum garanti SELL: +{guaranteed_profit_pips:.1f} pips!")
-                        elif result:
-                            # Gestion des erreurs SELL avec détails
-                            error_details = {
-                                16: "INVALID_STOPS - Niveaux SL/TP invalides",
-                                10006: "REQUEST_REJECT - Requête rejetée", 
-                                10015: "INVALID_PRICE - Prix invalide",
-                                10016: "INVALID_STOPS - Distance stops insuffisante",
-                                10018: "MARKET_CLOSED - Marché fermé",
-                                10025: "TRADE_DISABLED - Trading désactivé"
-                            }
-                            
-                            error_desc = error_details.get(result.retcode, f"Code {result.retcode}")
-                            error_msg = getattr(result, 'comment', "Erreur inconnue")
-                            
-                            # 🛡️ GESTION SPÉCIALE POUR TRADE_DISABLED (SELL)
-                            if result.retcode == 10025 or result.retcode == mt5.TRADE_RETCODE_TRADE_DISABLED:
-                                # Pour TRADE_DISABLED, on log périodiquement (toutes les 10 tentatives)
-                                if not hasattr(self, '_trade_disabled_count_sell'):
-                                    self._trade_disabled_count_sell = 0
-                                self._trade_disabled_count_sell += 1
-                                
-                                if self._trade_disabled_count_sell % 10 == 1:  # Premier message puis tous les 10
-                                    safe_log(f"⚠️ TRADING DÉSACTIVÉ - Trailing stops SELL en pause temporaire")
-                                    safe_log(f"   🔧 Vérifiez les paramètres MT5 (Outils → Options → Trading)")
-                                    safe_log(f"   📊 Position SELL {ticket} surveillée, trailing reprendra quand autorisé")
-                                    safe_log(f"   🔄 Tentative {self._trade_disabled_count_sell} (message affiché toutes les 10)")
-                                # On ne met PAS le ticket en failed pour permettre la reprise
-                                continue
-                            
-                            # Pour les autres erreurs, on log normalement
-                            safe_log(f"❌ Échec trailing stop SELL {ticket}: {error_desc}")
-                            safe_log(f"   📝 Détail MT5: {error_msg}")
-                            safe_log(f"   📊 SL tenté: {new_sl_progressive:.5f}")
-                            safe_log(f"   📊 Prix ASK: {current_price_ask:.5f}")
-                            safe_log(f"   📊 Distance: {abs(new_sl_progressive - current_price_ask):.5f}")
-                            
-                            # Erreurs critiques (SAUF TRADE_DISABLED)
-                            if result.retcode in [mt5.TRADE_RETCODE_INVALID_STOPS, mt5.TRADE_RETCODE_INVALID_PRICE, 16, 10015, 10016]:
-                                safe_log(f"   🚨 Erreur critique SELL, arrêt trailing pour {ticket}")
-                                self._failed_trailing_tickets.add(ticket)
-                    except Exception as e:
-                        safe_log(f"❌ Exception trailing stop SELL {ticket}: {str(e)}")
-
     def close_positive_positions(self):
         """🟢 FERME AUTOMATIQUEMENT TOUTES LES POSITIONS POSITIVES"""
         if not ENABLE_REAL_TRADING:
@@ -1995,33 +1795,7 @@ class M5PullbackBot:
             safe_log(f"   🛡️ Marge sécurité: -{safety_margin:.3f}")
             safe_log(f"   🎯 SL Final: {structural_sl:.2f}")
             safe_log(f"   📏 Distance: {(entry_price - structural_sl):.2f} points ({((entry_price - structural_sl)/current_atr):.1f}x ATR)")
-            
-        else:  # SELL
-            # Pour SELL: SL au-dessus du dernier swing high
-            structural_sl = structural_data['swing_high'] + safety_margin
-            
-            # Sécurité: SL ne doit pas être trop proche (minimum 2x ATR)
-            min_distance = current_atr * 2.0
-            max_allowed_sl = entry_price + min_distance
-            
-            # Sécurité: SL ne doit pas être trop loin (maximum 5x ATR)
-            max_distance = current_atr * 5.0
-            min_allowed_sl = entry_price + max_distance
-            
-            # Application des limites
-            if structural_sl < max_allowed_sl:
-                structural_sl = max_allowed_sl
-                safe_log(f"🔧 SL ajusté: Trop proche → {structural_sl:.2f}")
-            elif structural_sl > min_allowed_sl:
-                structural_sl = min_allowed_sl
-                safe_log(f"🔧 SL ajusté: Trop loin → {structural_sl:.2f}")
-            
-            safe_log(f"🏗️ SL STRUCTUREL SELL:")
-            safe_log(f"   📈 Swing High: {structural_data['swing_high']:.2f}")
-            safe_log(f"   🛡️ Marge sécurité: +{safety_margin:.3f}")
-            safe_log(f"   🎯 SL Final: {structural_sl:.2f}")
-            safe_log(f"   📏 Distance: {(structural_sl - entry_price):.2f} points ({((structural_sl - entry_price)/current_atr):.1f}x ATR)")
-        
+                   
         return structural_sl
 
     def log_detailed_market_analysis(self, trend, strength, indicators, rejection_reason=""):
@@ -2124,19 +1898,7 @@ class M5PullbackBot:
             
             for condition in buy_conditions:
                 safe_log(f"      {condition}")
-        
-        # Conditions pour SELL (ULTRA-STRICTES)
-        elif trend == "BEARISH":
-            safe_log(f"   📉 ANALYSE SELL (CONDITIONS ULTRA-STRICTES):")
-            sell_conditions = []
-            sell_conditions.append(f"✅ Tendance BEARISH" if strength >= 95 else f"❌ Force {strength:.1f}% < 95% (ULTRA-STRICT)")
-            sell_conditions.append(f"✅ Pullback OK" if pullback_quality >= 80 else f"❌ Pullback {pullback_quality:.0f}% < 80% (ULTRA-STRICT)")
-            sell_conditions.append(f"✅ RSI OK" if self.config['RSI_OVERSOLD'] <= current_rsi <= self.config['RSI_OVERBOUGHT'] else f"❌ RSI {current_rsi:.1f} hors zone [30-65] (ULTRA-STRICT)")
-            sell_conditions.append(f"✅ ATR OK" if current_atr >= 2.0 and current_atr <= OPTIMAL_ATR_MAX else f"❌ ATR {current_atr:.3f} < 2.0 ou > {OPTIMAL_ATR_MAX} (ULTRA-STRICT)")
-            
-            for condition in sell_conditions:
-                safe_log(f"      {condition}")
-        
+              
         else:
             safe_log(f"   ❌ TENDANCE: {trend} - Force insuffisante ou direction incertaine")
         
@@ -2168,18 +1930,7 @@ class M5PullbackBot:
                         if remaining > 0:
                             next_trade_time = current_time + timedelta(seconds=remaining)
                             safe_log(f"   🎯 Prochain trade BUY possible: {next_trade_time.strftime('%H:%M:%S')}")
-                
-                elif trend == "BEARISH":
-                    if self.last_sell_timestamp:
-                        time_since_last = (current_time - self.last_sell_timestamp).total_seconds()
-                        remaining = max(0, cooldown_duration - time_since_last)
-                        minutes_remaining = int(remaining // 60)
-                        seconds_remaining = int(remaining % 60)
-                        safe_log(f"   ⏰ Temps restant SELL: {minutes_remaining}m {seconds_remaining}s")
-                        if remaining > 0:
-                            next_trade_time = current_time + timedelta(seconds=remaining)
-                            safe_log(f"   🎯 Prochain trade SELL possible: {next_trade_time.strftime('%H:%M:%S')}")
-                
+                                
                 safe_log(f"   💡 Conseil: Le signal reste valide, patience!")
         
         safe_log(f"   📊 Pour trader, il faut TOUTES les conditions ✅")
@@ -2201,9 +1952,8 @@ class M5PullbackBot:
             safe_log(f"📈 Marché HAUSSIER → Fréquence: {frequency}s (5min)")
             return frequency
         elif trend == 'BEARISH':
-            frequency = 300  # 5 minutes entre les trades
-            safe_log(f"📉 Marché BAISSIER → Fréquence: {frequency}s (5min)")
-            return frequency
+            safe_log(f"📉 Marché BAISSIER détecté → ⚠️ BOT TRADE UNIQUEMENT EN BULLISH - Pas de signal généré")
+            return None  # Pas de trading en tendance baissière
         else:
             safe_log(f"➡️ Marché NEUTRE → PAS DE TRADING (direction incertaine)")
             return None  # Pas de trading si direction incertaine
@@ -2470,7 +2220,7 @@ class M5PullbackBot:
                 if success:
                     closed_count += 1
                     total_profit += position.profit
-                    position_type = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
+                    position_type = "BUY"
                     safe_log(f"   ✅ {position_type} fermé: Ticket {position.ticket} | P&L: {position.profit:+.2f}€")
                 else:
                     safe_log(f"   ❌ Échec fermeture: Ticket {position.ticket}")
@@ -2505,7 +2255,7 @@ class M5PullbackBot:
             total_profit = 0
             
             for position in mt5_positions:
-                position_type = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
+                position_type = "BUY"
                 profit_status = "PROFIT" if position.profit > 0 else "PERTE"
                 
                 safe_log(f"   🔴 Fermeture {position_type}: Ticket {position.ticket} | {profit_status}: {position.profit:+.2f}€")
@@ -2926,13 +2676,10 @@ class M5PullbackBot:
         - Force 95-99% : Risque élevé 6%
         - Force 100% : Risque maximum 12% (certitude absolue)
         
-        STRATÉGIE SELL (conservateur fixe) :
-        - Toutes forces : Risque fixe 3% (SELL plus risqué sur XAUUSD)
-        
         Args:
             atr_sl_distance: Distance du Stop Loss basée sur l'ATR
             trend_strength: Force de la tendance (0-100%)
-            trade_type: Type de trade ("BUY" ou "SELL")
+            trade_type: "BUY"
             
         Returns:
             float: Taille de lot optimale (adaptée à la certitude et au type)
@@ -2946,29 +2693,23 @@ class M5PullbackBot:
             
             current_equity = account_info.equity
             
-            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE ET TYPE DE TRADE
-            if trade_type == "SELL":
-                # 🔴 SELL: Risque fixe conservateur de 3% (indépendant de la force)
-                risk_percent = 3.0
-                risk_level = "SELL_CONSERVATEUR"
-                safe_log(f"🔴 SELL DÉTECTÉ: Risque fixe 3% appliqué (plus conservateur)")
+            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE
+            # 🟢 BUY: Risque adaptatif selon la force (logique normale)
+            if trend_strength >= 100:
+                risk_percent = 12  # 🚀 Risque maximum - Certitude absolue
+                risk_level = "MAXIMUM"
+            elif trend_strength >= 95.0:
+                risk_percent = 6  # 🎯 Risque élevé - Très forte certitude
+                risk_level = "ÉLEVÉ"
+            elif trend_strength >= 90.0:
+                risk_percent = 3.5  # ⚡ Risque augmenté - Forte certitude
+                risk_level = "AUGMENTÉ"
+            elif trend_strength >= 80.0:
+                risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
+                risk_level = "STANDARD"
             else:
-                # 🟢 BUY: Risque adaptatif selon la force (logique normale)
-                if trend_strength >= 100:
-                    risk_percent = 12  # 🚀 Risque maximum - Certitude absolue
-                    risk_level = "MAXIMUM"
-                elif trend_strength >= 95.0:
-                    risk_percent = 6  # 🎯 Risque élevé - Très forte certitude
-                    risk_level = "ÉLEVÉ"
-                elif trend_strength >= 90.0:
-                    risk_percent = 3.5  # ⚡ Risque augmenté - Forte certitude
-                    risk_level = "AUGMENTÉ"
-                elif trend_strength >= 80.0:
-                    risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
-                    risk_level = "STANDARD"
-                else:
-                    risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
-                    risk_level = "STANDARD"
+                risk_percent = 2.5  # 📊 Risque standard - Certitude modérée
+                risk_level = "STANDARD"
             
             # 🛡️ APPLICATION DU MODE DÉGRADÉ
             if self.stats.get('balance_safety_active', False):
@@ -3132,11 +2873,6 @@ class M5PullbackBot:
             else:
                 time_since_last_buy = (current_time - self.last_buy_timestamp).total_seconds()
         
-        if self.last_sell_timestamp is None:
-            time_since_last_sell = float('inf')  # Premier trade SELL = pas de cooldown
-        else:
-            time_since_last_sell = (current_time - self.last_sell_timestamp).total_seconds()
-        
         # Vérification limites globales - LIMITE ADAPTATIVE SELON EQUITY
         current_positions = len(self.open_positions)
         max_positions_adaptatif = self.calculate_adaptive_max_positions()
@@ -3189,57 +2925,14 @@ class M5PullbackBot:
                 'confidence': min(strength + pullback_quality, 100) / 100
             }
 
-        # 🔴 STRATÉGIE 2: VENTE SUR PULLBACK BAISSIER (SELL) - CONDITIONS ULTRA-STRICTES
-        # ⚠️ SELL très risqué sur XAUUSD - Conditions drastiquement renforcées
-        elif (trend == "BEARISH" and 
-              strength >= 95.0 and           # 🚨 ULTRA-STRICT: 95% minimum (au lieu de 80%)
-              h1_trend == "BEARISH" and      # 🛡️ CONFIRMATION H1 OBLIGATOIRE
-              pullback_quality >= 80 and    # 🚨 ULTRA-STRICT: 80% minimum (au lieu de 60%)
-              current_rsi >= self.config['RSI_OVERSOLD'] and  # RSI > 30 (pas en survente extrême)
-              current_rsi <= self.config['RSI_OVERBOUGHT'] and  # RSI ≤ 65 (même que BUY)
-              current_atr >= 2.0):          # 🚨 ULTRA-STRICT: ATR ≥ 2.0 (volatilité forte requise)
-            
-            # Cooldown SELL adaptatif
-            sell_cooldown = 300  # 5 minutes entre les trades
-            
-            if time_since_last_sell < sell_cooldown:
-                remaining_time = sell_cooldown - time_since_last_sell
-                minutes_remaining = int(remaining_time // 60)
-                seconds_remaining = int(remaining_time % 60)
-                safe_log(f"⏳ SELL Cooldown PULLBACK: {remaining_time:.0f}s restantes ({minutes_remaining}m {seconds_remaining}s)")
-                safe_log(f"✅ SIGNAL SELL VALIDE - En attente de cooldown (toutes conditions remplies!)")
-                safe_log(f"🕐 Prochain trade SELL possible à: {(datetime.now() + timedelta(seconds=remaining_time)).strftime('%H:%M:%S')}")
-                self.log_detailed_market_analysis(trend, strength, indicators, "SIGNAL_VALIDE_COOLDOWN")
-                return None
-            
-            # 🎯 Signal SELL ULTRA-STRICT validé !
-            safe_log(f"🔴 SIGNAL SELL ULTRA-VALIDÉ! Conditions drastiques remplies:")
-            safe_log(f"   📈 Tendance: {trend} {strength:.1f}% (≥95% requis)")
-            safe_log(f"   📊 RSI: {current_rsi:.1f} (30-65 comme BUY)")
-            safe_log(f"   🎯 Pullback: {pullback_quality:.0f}% (≥80% requis)")
-            safe_log(f"   ⚡ ATR: {current_atr:.2f} (≥2.0 requis)")
-            safe_log(f"   🚨 CONDITIONS ULTRA-STRICTES POUR RÉDUIRE RISQUES SELL")
-            
-            # Message cooldown adaptatif selon la situation
-            if time_since_last_sell == float('inf'):
-                safe_log(f"   ⏰ Cooldown: Premier trade SELL ou cooldown resetté!")
-            else:
-                safe_log(f"   ⏰ Cooldown: OK ({time_since_last_sell:.0f}s >= {sell_cooldown}s)")
-            
-            # Log succès détaillé
-            self.log_detailed_market_analysis(trend, strength, indicators, "SIGNAL_SELL_VALIDÉ")
-            
-            return {
-                'type': 'SELL', 
-                'reason': 'PULLBACK_BAISSIER_M5',  # Rebond sur tendance baissière
-                'strength': strength,
-                'rsi': current_rsi,
-                'pullback_quality': pullback_quality,
-                'atr': current_atr,
-                'confidence': min(strength + pullback_quality, 100) / 100
-            }
-        
         # 🐛 DEBUG: Pourquoi pas de TRADE ? Loggons les conditions non remplies
+        
+        # ⚡ BEARISH: Log minimaliste uniquement (pas de diagnostic détaillé)
+        if trend == "BEARISH":
+            safe_log(f"📉 Marché BEARISH → Bot trade uniquement en BULLISH - Pas de signal")
+            return None  # Sortie immédiate sans diagnostics
+        
+        # Pour BULLISH et autres tendances, logs détaillés
         safe_log(f"🔍 ANALYSE COMPLÈTE:")
         safe_log(f"   📊 Tendance: {trend} {strength:.1f}% (≥80% requis)")
         safe_log(f"   📊 H1 Trend: {h1_trend if 'h1_trend' in locals() else 'Non vérifié'}")
@@ -3259,22 +2952,11 @@ class M5PullbackBot:
             if current_rsi > self.config['RSI_OVERBOUGHT']:
                 safe_log(f"   ❌ RSI {current_rsi:.1f} > {self.config['RSI_OVERBOUGHT']} (surachat)")
         
-        elif trend == "BEARISH":
-            safe_log(f"🔍 CONDITIONS SELL NON REMPLIES:")
-            if h1_trend != "BEARISH":
-                safe_log(f"   ❌ H1 trend {h1_trend} ≠ BEARISH (conflit multi-timeframe)")
-            if pullback_quality < 60:
-                safe_log(f"   ❌ Pullback {pullback_quality:.0f}% < 60%")
-            if current_rsi < self.config['RSI_OVERSOLD']:
-                safe_log(f"   ❌ RSI {current_rsi:.1f} < {self.config['RSI_OVERSOLD']} (trop bas)")
-            if current_rsi > 65:
-                safe_log(f"   ❌ RSI {current_rsi:.1f} > 65 (trop élevé)")
-        
         else:
             safe_log(f"🔍 TENDANCE INSUFFISANTE:")
             safe_log(f"   ❌ Force {strength:.1f}% < 80% ou direction incertaine")
             
-        # Diagnostic détaillé pour tous les cas de rejet
+        # Diagnostic détaillé SEULEMENT pour BULLISH et tendances non BEARISH
         self.log_detailed_market_analysis(trend, strength, indicators, "CONDITIONS_NON_REMPLIES")
         
         # Aucune condition remplie
@@ -3288,12 +2970,8 @@ class M5PullbackBot:
         current_price = signal.get('price', None)
         trend_strength = signal.get('strength', 50)
         
-        # SL adaptatif selon le type de trade
-        if trade_type == "SELL":
-            sl_multiplier = ATR_SL_MULTIPLIER_SELL  # 5.0x ATR pour SELL (plus de marge)
-            safe_log(f"🔴 SELL DÉTECTÉ: SL élargi à {sl_multiplier}x ATR pour plus de marge")
-        else:
-            sl_multiplier = ATR_SL_MULTIPLIER  # 2.5x ATR standard pour BUY
+
+        sl_multiplier = ATR_SL_MULTIPLIER  # 2.5x ATR standard pour BUY
         
         # Récupération prix réel pour calcul TP/SL
         tick_info = mt5.symbol_info_tick(self.symbol)
@@ -3304,8 +2982,6 @@ class M5PullbackBot:
         # Prix d'entrée basé sur le type d'ordre
         if trade_type == 'BUY':
             entry_price = tick_info.ask
-        else:  # SELL
-            entry_price = tick_info.bid
         
         # 🏗️ ANALYSE STRUCTURELLE POUR SL INTELLIGENT
         safe_log(f"🔍 ANALYSE STRUCTURELLE pour SL optimal...")
@@ -3324,8 +3000,6 @@ class M5PullbackBot:
             sl_distance = sl_multiplier * atr_value
             if trade_type == 'BUY':
                 sl_price = entry_price - sl_distance
-            else:  # SELL
-                sl_price = entry_price + sl_distance
             safe_log(f"📊 SL ATR Fallback: {sl_price:.2f}")
         
         # 🔥 NOUVELLE STRATÉGIE : TP ADAPTATIFS basés sur le SL structurel
@@ -3336,8 +3010,6 @@ class M5PullbackBot:
         # Application selon le type d'ordre
         if trade_type == 'BUY':
             tp_price = entry_price + tp_distance
-        else:  # SELL
-            tp_price = entry_price - tp_distance
         
         # Conversion en pips pour XAUUSD (1 pip = 0.1)
         sl_pips = sl_distance / 0.1
@@ -3378,8 +3050,6 @@ class M5PullbackBot:
         # �🕐 MISE À JOUR TIMESTAMP selon le type de trade
         if trade_type == 'BUY':
             self.last_buy_timestamp = datetime.now()
-        else:  # SELL
-            self.last_sell_timestamp = datetime.now()
         
         # Exécution selon le mode (réel ou simulation)
         if ENABLE_REAL_TRADING:
@@ -3475,25 +3145,30 @@ class M5PullbackBot:
                 f"Pullback:{pullback_quality:.0f}% | Pos:{open_positions_count} | "
                 f"{safety_status} | {daily_status}")
         
-        # 🔬 DIAGNOSTIC SYSTÉMATIQUE (même sans signal)
-        safe_log(f"🧪 DIAGNOSTIC M5: Force {strength:.1f}% | Pullback {pullback_quality:.0f}% | RSI {current_rsi:.1f} | ATR {current_atr:.3f}")
-        if strength < 80:
-            safe_log(f"   ❌ Force insuffisante: {strength:.1f}% < 80% requis")
-        if pullback_quality < 60:
-            # Calcul explicatif pour le pullback
-            distance_to_ema50 = abs(current_price - ema_pullback)
-            pullback_threshold = current_atr * 3.0  # ATR_PULLBACK_MULTIPLIER
-            safe_log(f"   ❌ Pullback faible: {pullback_quality:.0f}% < 60% requis")
-            safe_log(f"      📏 Distance prix/EMA50: {distance_to_ema50:.4f} | Seuil max: {pullback_threshold:.4f} (3.0×ATR)")
-            safe_log(f"      💰 Prix: {current_price:.4f} | EMA50: {ema_pullback:.4f}")
-            if distance_to_ema50 > pullback_threshold:
-                safe_log(f"      🚫 TROP ÉLOIGNÉ: Prix dépasse la zone pullback de {(distance_to_ema50/pullback_threshold*100-100):.1f}%")
-            else:
-                safe_log(f"      ⚡ Dans zone pullback mais qualité: {pullback_quality:.1f}%")
-        if current_rsi < 30 or current_rsi > 70:
-            safe_log(f"   ⚡ RSI en zone: {current_rsi:.1f} (30-70 = neutre)")
-        if current_atr < 1.5 or current_atr > 7.0:
-            safe_log(f"   ⚠️ ATR hors zone optimale: {current_atr:.3f} (1.5-7.0 optimal)")
+        # 🔬 DIAGNOSTIC SYSTÉMATIQUE (simplifié pour BEARISH)
+        if trend == "BEARISH":
+            # Log minimaliste pour BEARISH - pas de diagnostic détaillé
+            safe_log(f"🧪 DIAGNOSTIC M5: BEARISH détecté → Pas de trading (bot BUY uniquement)")
+        else:
+            # Diagnostic complet pour BULLISH et NEUTRAL
+            safe_log(f"🧪 DIAGNOSTIC M5: Force {strength:.1f}% | Pullback {pullback_quality:.0f}% | RSI {current_rsi:.1f} | ATR {current_atr:.3f}")
+            if strength < 80:
+                safe_log(f"   ❌ Force insuffisante: {strength:.1f}% < 80% requis")
+            if pullback_quality < 60:
+                # Calcul explicatif pour le pullback
+                distance_to_ema50 = abs(current_price - ema_pullback)
+                pullback_threshold = current_atr * 3.0  # ATR_PULLBACK_MULTIPLIER
+                safe_log(f"   ❌ Pullback faible: {pullback_quality:.0f}% < 60% requis")
+                safe_log(f"      📏 Distance prix/EMA50: {distance_to_ema50:.4f} | Seuil max: {pullback_threshold:.4f} (3.0×ATR)")
+                safe_log(f"      💰 Prix: {current_price:.4f} | EMA50: {ema_pullback:.4f}")
+                if distance_to_ema50 > pullback_threshold:
+                    safe_log(f"      🚫 TROP ÉLOIGNÉ: Prix dépasse la zone pullback de {(distance_to_ema50/pullback_threshold*100-100):.1f}%")
+                else:
+                    safe_log(f"      ⚡ Dans zone pullback mais qualité: {pullback_quality:.1f}%")
+            if current_rsi < 30 or current_rsi > 70:
+                safe_log(f"   ⚡ RSI en zone: {current_rsi:.1f} (30-70 = neutre)")
+            if current_atr < 1.5 or current_atr > 7.0:
+                safe_log(f"   ⚠️ ATR hors zone optimale: {current_atr:.3f} (1.5-7.0 optimal)")
         
         # Vérification signal PULLBACK (seulement si pas en mode sécurité)
         if not self.stats['balance_safety_active']:
@@ -3512,22 +3187,28 @@ class M5PullbackBot:
                     safe_log(f"❌ Échec exécution trade M5")
             else:
                 # 📝 RÉSUMÉ: Pourquoi aucun signal n'est généré
-                safe_log(f"💤 AUCUN SIGNAL M5 - Résumé des conditions:")
-                if strength < 80:
-                    safe_log(f"   🎯 Force {strength:.1f}% < 80% (condition principale non remplie)")
-                if pullback_quality < 60:
-                    safe_log(f"   📉 Pullback {pullback_quality:.0f}% < 60% (position pas assez proche EMA50)")
-                if current_rsi <= 30:
-                    safe_log(f"   📊 RSI {current_rsi:.1f} en survente (attente rebond)")
-                elif current_rsi >= 70:
-                    safe_log(f"   📊 RSI {current_rsi:.1f} en surachat (attente correction)")
-                if current_atr < 1.5:
-                    safe_log(f"   ⚡ ATR {current_atr:.3f} trop faible (marché peu volatil)")
-                elif current_atr > 7.0:
-                    safe_log(f"   ⚡ ATR {current_atr:.3f} trop élevé (marché trop volatil)")
-                if trend == "NEUTRAL":
-                    safe_log(f"   🎭 Tendance neutre (pas de direction claire)")
-                safe_log(f"   ⏳ Prochaine analyse dans 30 secondes...")
+                # ⚡ BEARISH: Pas de log détaillé (déjà fait dans should_open_position)
+                if trend == "BEARISH":
+                    # Pas de log supplémentaire - le message minimal a déjà été affiché
+                    pass
+                else:
+                    # BULLISH ou NEUTRAL: logs détaillés
+                    safe_log(f"💤 AUCUN SIGNAL M5 - Résumé des conditions:")
+                    if strength < 80:
+                        safe_log(f"   🎯 Force {strength:.1f}% < 80% (condition principale non remplie)")
+                    if pullback_quality < 60:
+                        safe_log(f"   📉 Pullback {pullback_quality:.0f}% < 60% (position pas assez proche EMA50)")
+                    if current_rsi <= 30:
+                        safe_log(f"   📊 RSI {current_rsi:.1f} en survente (attente rebond)")
+                    elif current_rsi >= 70:
+                        safe_log(f"   📊 RSI {current_rsi:.1f} en surachat (attente correction)")
+                    if current_atr < 1.5:
+                        safe_log(f"   ⚡ ATR {current_atr:.3f} trop faible (marché peu volatil)")
+                    elif current_atr > 7.0:
+                        safe_log(f"   ⚡ ATR {current_atr:.3f} trop élevé (marché trop volatil)")
+                    if trend == "NEUTRAL":
+                        safe_log(f"   🎭 Tendance neutre (pas de direction claire)")
+                    safe_log(f"   ⏳ Prochaine analyse dans 30 secondes...")
         else:
             # En mode sécurité, message périodique
             if hasattr(self, '_safety_message_count'):
@@ -3918,7 +3599,6 @@ def main():
     safe_log("� EMA 200 (tendance) + EMA 50 (pullback) + RSI + ATR") 
     safe_log("🎯 Stratégies intelligentes:")
     safe_log("   🟢 BUY: Tendance hausse + repli vers EMA 50")
-    safe_log("   🔴 SELL: Tendance baisse + rebond vers EMA 50")
     safe_log("⚖️ TP/SL adaptatifs basés sur la volatilité (ATR)")
     safe_log("🛡️ FILET SÉCURITÉ: Balance -5% → Pause 1h")
     
