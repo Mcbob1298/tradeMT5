@@ -233,22 +233,30 @@ class M5PullbackBot:
 
 
         
-        # �🕐 HORAIRES DE TRADING - Arrêt du trading à 22h00, reprise à 00h20
+        # �🕐 HORAIRES DE TRADING - Arrêt du trading à 22h00, reprise à 00h00 (minuit)
         self.daily_close_time = 22.0   # Heure d'arrêt du trading (22h00) - PLUS DE FERMETURE FORCÉE
-        self.daily_start_time = 0.33   # Heure de reprise (00h20)
+        self.daily_start_time = 0.0    # Heure de reprise (00h00 - minuit)
         
         # Vérification de l'état initial selon l'heure de démarrage
         current_time = datetime.now()
         current_hour = current_time.hour
         current_minute = current_time.minute
         current_time_decimal = current_hour + (current_minute / 60.0)
+        current_weekday = current_time.weekday()  # 0=Lundi, 5=Samedi, 6=Dimanche
         
-        # Si on démarre en dehors des heures de trading (avant 00h20 ou après 22h00)
-        if current_time_decimal < self.daily_start_time or current_time_decimal >= self.daily_close_time:
+        # Si on démarre pendant le week-end (samedi ou dimanche)
+        if current_weekday == 5 or current_weekday == 6:  # Samedi ou Dimanche
+            self.is_trading_paused = True
+            day_name = "Samedi" if current_weekday == 5 else "Dimanche"
+            safe_log(f"📅 DÉMARRAGE EN WEEK-END - {day_name} {current_hour}h{current_minute:02d}")
+            safe_log(f"   🌙 Trading fermé (week-end)")
+            safe_log(f"   ⏳ Reprise prévue lundi à 00h00")
+        # Si on démarre en dehors des heures de trading (avant 00h00 ou après 22h00)
+        elif current_time_decimal < self.daily_start_time or current_time_decimal >= self.daily_close_time:
             self.is_trading_paused = True  # Démarre en pause
             safe_log(f"🕐 DÉMARRAGE EN PAUSE NOCTURNE - {current_hour}h{current_minute:02d}")
-            safe_log(f"   🌙 Trading fermé (horaires: 00h20 à 22h00)")
-            safe_log(f"   ⏳ Reprise prévue à 00h20")
+            safe_log(f"   🌙 Trading fermé (horaires: 00h00 à 22h00)")
+            safe_log(f"   ⏳ Reprise prévue à 00h00")
         else:
             self.is_trading_paused = False  # Démarre en mode actif
             safe_log(f"🕐 DÉMARRAGE EN HEURES DE TRADING - {current_hour}h{current_minute:02d}")
@@ -2445,13 +2453,46 @@ class M5PullbackBot:
             safe_log(f"❌ Erreur reset quotidien: {e}")
 
     def check_trading_hours(self):
-        """🕐 Vérifie les horaires de trading - ARRÊT SIMPLE À 22H00 sans fermeture forcée"""
+        """🕐 Vérifie les horaires de trading - PAUSE WEEK-END + ARRÊT SIMPLE À 22H00"""
         try:
             current_time = datetime.now()
             current_hour = current_time.hour
             current_minute = current_time.minute
-            current_time_decimal = current_hour + (current_minute / 60.0)  # Conversion en décimal pour 00h20 = 0.33
-            current_weekday = current_time.weekday()  # 0=Lundi, 4=Vendredi, 6=Dimanche
+            current_time_decimal = current_hour + (current_minute / 60.0)  # Conversion en décimal pour 00h00 = 0.0
+            current_weekday = current_time.weekday()  # 0=Lundi, 4=Vendredi, 5=Samedi, 6=Dimanche
+            
+            # 📅 VÉRIFICATION WEEK-END EN PRIORITÉ (Samedi et Dimanche)
+            if current_weekday == 5:  # Samedi
+                if not hasattr(self, '_weekend_log_count'):
+                    self._weekend_log_count = 0
+                
+                # Log périodique (toutes les 100 vérifications)
+                if self._weekend_log_count % 100 == 0:
+                    safe_log(f"📅 WEEK-END - Samedi {current_hour}h{current_minute:02d}")
+                    safe_log(f"   🚫 Pas de trading le week-end")
+                    safe_log(f"   ⏰ Reprise lundi à 00h00")
+                
+                self._weekend_log_count += 1
+                self.is_trading_paused = True
+                return False
+            
+            elif current_weekday == 6:  # Dimanche
+                if not hasattr(self, '_weekend_log_count'):
+                    self._weekend_log_count = 0
+                
+                # Log périodique (toutes les 100 vérifications)
+                if self._weekend_log_count % 100 == 0:
+                    safe_log(f"📅 WEEK-END - Dimanche {current_hour}h{current_minute:02d}")
+                    safe_log(f"   🚫 Pas de trading le week-end")
+                    safe_log(f"   ⏰ Reprise lundi à 00h00")
+                
+                self._weekend_log_count += 1
+                self.is_trading_paused = True
+                return False
+            
+            # Reset du compteur de logs week-end en semaine
+            if current_weekday < 5 and hasattr(self, '_weekend_log_count'):
+                self._weekend_log_count = 0
             
             # 🌙 ARRÊT SIMPLE DU TRADING À 22H00 - PLUS DE FERMETURE FORCÉE
             if current_time_decimal >= self.daily_close_time and not self.is_trading_paused:
@@ -2460,7 +2501,7 @@ class M5PullbackBot:
                 safe_log(f"   ✅ ARRÊT du trading (pas de nouveaux trades)")
                 safe_log(f"   🎯 Positions MAINTENUES avec leurs SL/TP")
                 safe_log(f"   🔄 Trailing stop CONTINUE de fonctionner")
-                safe_log(f"   ⏸️ Reprise du trading à 00h20")
+                safe_log(f"   ⏸️ Reprise du trading à 00h00")
                 
                 # Activation de la pause nocturne (trading seulement)
                 self.is_trading_paused = True
@@ -2469,32 +2510,24 @@ class M5PullbackBot:
                 safe_log(f"   🚫 Trading STOPPÉ")
                 safe_log(f"   🎯 Positions en cours: MAINTENUES")
                 safe_log(f"   � SL/TP: ACTIFS")
-                safe_log(f"   ⏰ Reprise: 00h20")
+                safe_log(f"   ⏰ Reprise: 00h00")
                 
                 return False  # Trading arrêté, mais positions maintenues
             
-            # Vérification si on peut reprendre à 7h30 (sauf week-end)
+            # Vérification si on peut reprendre à 00h00 (sauf week-end déjà géré au-dessus)
             elif current_time_decimal >= self.daily_start_time and current_time_decimal < self.daily_close_time and self.is_trading_paused:
-                # Vérification spéciale week-end: pas de reprise samedi/dimanche
-                if current_weekday == 5:  # Samedi
-                    safe_log(f"📅 WEEK-END - Samedi | Pas de trading")
-                    return False
-                elif current_weekday == 6:  # Dimanche
-                    safe_log(f"📅 WEEK-END - Dimanche | Reprise lundi 7h30")
-                    return False
-                else:
-                    # Reprise normale (lundi à vendredi)
-                    day_name = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"][current_weekday]
-                    safe_log(f"🌅 REPRISE DU TRADING - {day_name} 7h30 atteinte")
-                    safe_log(f"   🕐 Heure actuelle: {current_hour}h{current_minute:02d}")
-                    safe_log(f"   ✅ Trading autorisé jusqu'à 21h30")
-                    
-                    # Désactivation de la pause nocturne
-                    self.is_trading_paused = False
-                    
-                    return True  # Trading autorisé
+                # Reprise normale (lundi à vendredi uniquement, week-end déjà filtré)
+                day_name = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"][current_weekday]
+                safe_log(f"🌅 REPRISE DU TRADING - {day_name} 00h00 atteinte")
+                safe_log(f"   🕐 Heure actuelle: {current_hour}h{current_minute:02d}")
+                safe_log(f"   ✅ Trading autorisé jusqu'à 22h00")
+                
+                # Désactivation de la pause nocturne
+                self.is_trading_paused = False
+                
+                return True  # Trading autorisé
             
-            # Vérification si on est en période de pause (21h30 à 7h30)
+            # Vérification si on est en période de pause (22h00 à 00h00)
             elif self.is_trading_paused or current_time_decimal < self.daily_start_time or current_time_decimal >= self.daily_close_time:
                 # Pendant la pause, continuer à fermer les positions profitables
                 self.continue_21h30_special_mode()
@@ -2505,16 +2538,11 @@ class M5PullbackBot:
                 
                 self._pause_log_count += 1
                 if self._pause_log_count % 100 == 0:
-                    if current_weekday == 5:  # Samedi
-                        safe_log(f"📅 WEEK-END - Samedi {current_hour}h{current_minute:02d} | Reprise lundi 7h30")
-                    elif current_weekday == 6:  # Dimanche  
-                        safe_log(f"📅 WEEK-END - Dimanche {current_hour}h{current_minute:02d} | Reprise lundi 7h30")
-                    else:
-                        safe_log(f"🌙 PAUSE NOCTURNE - {current_hour}h{current_minute:02d} | Reprise à 7h30")
+                    safe_log(f"🌙 PAUSE NOCTURNE - {current_hour}h{current_minute:02d} | Reprise à 00h00")
                 
                 return False  # Trading en pause
             
-            # Trading normal autorisé (entre 7h30 et 21h30)
+            # Trading normal autorisé (entre 00h00 et 22h00, lundi à vendredi)
             return True
             
         except Exception as e:
