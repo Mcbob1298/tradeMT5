@@ -119,17 +119,6 @@ DEGRADED_MODE_RISK_MULTIPLIER = 0.2  # Risque = 20% du risque normal (2.5% -> 0.
 DEGRADED_MODE_RECOVERY_THRESHOLD = -2.0  # Seuil de sortie du mode dégradé (-2%)
 DEGRADED_MODE_MAX_RR_RATIO = 1.0  # Ratio R/R plafonné à 1:1 en mode dégradé
 
-# 🎯 SCALING OUT (Prise de Profit Partielle) - NOUVEAU
-ENABLE_SCALING_OUT = True          # ✅ Active la prise de profit partielle
-SCALING_OUT_TP_PERCENT = 80        # À 80% du TP, ferme 50% de la position
-SCALING_OUT_CLOSE_PERCENT = 50     # Ferme 50% de la position (le reste continue)
-SCALING_OUT_MIN_LOT = 0.02         # Lot minimum pour scaling out (2x 0.01)
-
-# 📊 TRAILING STOP STRUCTUREL - NOUVEAU
-ENABLE_STRUCTURAL_TRAILING = True   # ✅ Active le trailing stop structurel
-STRUCTURAL_TRAILING_LOOKBACK = 3    # Nombre de bougies à analyser (3 dernières bougies M5)
-STRUCTURAL_TRAILING_BUFFER = 0.3    # Buffer de sécurité (0.3x ATR sous le plus bas)
-
 # 🎯 TP DYNAMIQUE (Ajustement en Temps Réel) - NOUVEAU
 ENABLE_DYNAMIC_TP = True             # ✅ Active l'ajustement dynamique du TP
 DYNAMIC_TP_STRENGTH_THRESHOLD = 95   # Si force > 95%, on éloigne le TP (marché TRÈS fort)
@@ -1369,20 +1358,19 @@ class M5PullbackBot:
         🚀 SYSTÈME AVANCÉ DE GESTION DES PROFITS
         =========================================
         
-        🎯 SCALING OUT (Prise de Profit Partielle) :
-        - À 80% du TP → Fermeture de 50% de la position (gain sécurisé)
-        - Le reste (50%) continue avec trailing stop vers le TP final
-        
-        📊 TRAILING STOP STRUCTUREL :
-        - Suit le plus bas des 3 dernières bougies M5
-        - S'adapte à la volatilité réelle du marché
-        - Plus intelligent que les pourcentages fixes
-        
-        🔒 PROTECTION PROGRESSIVE CLASSIQUE (si scaling out pas activé) :
-        - 30% du TP → SL à 10% du profit
-        - 50% du TP → SL à 25% du profit
+        🛡️ PROTECTION PROGRESSIVE (TRAILING STOP) :
+        - 30% du TP → SL à 20% du profit
+        - 50% du TP → SL à 35% du profit
         - 75% du TP → SL à 50% du profit
-        - 90% du TP → SL à 75% du profit
+        - 90% du TP → SL à 75% du profit + 🚀 TP étendu de +50%
+        
+        💎 EXTENSION DU TP (EXTENSIONS MULTIPLES) :
+        Quand le trailing stop atteint 75% du profit (phase QUASI-TP),
+        le Take Profit est automatiquement étendu de 50% supplémentaire.
+        
+        🔥 PAS DE LIMITE : Le système peut étendre le TP autant de fois
+        que nécessaire tant que le prix continue à progresser à 90% du TP.
+        Le SL suit toujours à 75% du profit actuel = Protection garantie !
         
         ⚡ RÈGLE D'OR : Le SL ne recule JAMAIS, seulement progression !
         """
@@ -1443,145 +1431,7 @@ class M5PullbackBot:
                 else:
                     tp_progress_pct = 0
                 
-                # 🎯 SCALING OUT - Prise de Profit Partielle (PRIORITÉ 1)
-                if ENABLE_SCALING_OUT and tp_progress_pct >= SCALING_OUT_TP_PERCENT:
-                    # Vérifier si scaling out déjà fait pour ce ticket
-                    if not hasattr(self, '_scaled_out_tickets'):
-                        self._scaled_out_tickets = set()
-                    
-                    if ticket not in self._scaled_out_tickets:
-                        # Vérifier si le volume le permet (au moins 0.02 pour pouvoir diviser par 2)
-                        if mt5_position.volume >= SCALING_OUT_MIN_LOT:
-                            # Calcul du volume à fermer (50%)
-                            close_volume = round(mt5_position.volume * (SCALING_OUT_CLOSE_PERCENT / 100), 2)
-                            
-                            # S'assurer que le volume restant est valide
-                            remaining_volume = mt5_position.volume - close_volume
-                            if remaining_volume >= symbol_info.volume_min and close_volume >= symbol_info.volume_min:
-                                
-                                safe_log(f"🎯 SCALING OUT - Ticket {ticket} (progression: {tp_progress_pct:.1f}%)")
-                                safe_log(f"   💰 Profit actuel: +{current_profit:.2f}€")
-                                safe_log(f"   📊 Fermeture partielle: {close_volume} lots sur {mt5_position.volume}")
-                                
-                                # Fermeture partielle
-                                close_request = {
-                                    "action": mt5.TRADE_ACTION_DEAL,
-                                    "symbol": self.symbol,
-                                    "volume": close_volume,
-                                    "type": mt5.ORDER_TYPE_SELL,  # Inverse du BUY
-                                    "position": ticket,
-                                    "price": current_price.bid,
-                                    "deviation": 20,
-                                    "magic": mt5_position.magic,
-                                    "comment": "ScalingOut-50%",
-                                    "type_time": mt5.ORDER_TIME_GTC,
-                                    "type_filling": mt5.ORDER_FILLING_IOC,
-                                }
-                                
-                                try:
-                                    result = mt5.order_send(close_request)
-                                    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-                                        partial_profit = (close_volume / mt5_position.volume) * current_profit
-                                        safe_log(f"✅ SCALING OUT RÉUSSI!")
-                                        safe_log(f"   💰 Gain encaissé: +{partial_profit:.2f}€")
-                                        safe_log(f"   📊 Volume restant: {remaining_volume} lots")
-                                        safe_log(f"   🔄 Le reste continue vers le TP complet")
-                                        
-                                        # Déplacer le SL à breakeven pour le reste
-                                        breakeven_request = {
-                                            "action": mt5.TRADE_ACTION_SLTP,
-                                            "symbol": self.symbol,
-                                            "position": ticket,
-                                            "sl": entry_price + (0.5 * symbol_info.point),  # Légèrement en profit
-                                            "tp": mt5_position.tp,
-                                            "magic": mt5_position.magic,
-                                            "comment": "Breakeven-AfterScaling"
-                                        }
-                                        
-                                        be_result = mt5.order_send(breakeven_request)
-                                        if be_result and be_result.retcode == mt5.TRADE_RETCODE_DONE:
-                                            safe_log(f"   🛡️ SL déplacé à breakeven (+0.5 pts)")
-                                        
-                                        # Marquer ce ticket comme scalé
-                                        self._scaled_out_tickets.add(ticket)
-                                        continue  # Passer au ticket suivant
-                                        
-                                    else:
-                                        error_msg = getattr(result, 'comment', "Erreur inconnue") if result else "Aucun résultat"
-                                        safe_log(f"❌ Échec scaling out: {error_msg}")
-                                except Exception as e:
-                                    safe_log(f"❌ Erreur scaling out {ticket}: {e}")
-
-                # 📊 TRAILING STOP STRUCTUREL (PRIORITÉ 2 - après scaling out)
-                if ENABLE_STRUCTURAL_TRAILING and tp_progress_pct >= 30.0:
-                    # Récupérer les dernières bougies M5
-                    rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, STRUCTURAL_TRAILING_LOOKBACK + 1)
-                    if rates is not None and len(rates) >= STRUCTURAL_TRAILING_LOOKBACK:
-                        # Trouver le plus bas des X dernières bougies
-                        recent_lows = [rate['low'] for rate in rates[-STRUCTURAL_TRAILING_LOOKBACK:]]
-                        structural_low = min(recent_lows)
-                        
-                        # Calculer l'ATR pour le buffer
-                        atr_values = []
-                        for i in range(1, min(14, len(rates))):
-                            high_low = rates[i]['high'] - rates[i]['low']
-                            high_close_prev = abs(rates[i]['high'] - rates[i-1]['close'])
-                            low_close_prev = abs(rates[i]['low'] - rates[i-1]['close'])
-                            true_range = max(high_low, high_close_prev, low_close_prev)
-                            atr_values.append(true_range)
-                        
-                        current_atr = sum(atr_values) / len(atr_values) if atr_values else 0.01
-                        buffer = current_atr * STRUCTURAL_TRAILING_BUFFER
-                        
-                        # SL structurel = plus bas - buffer
-                        new_sl_structural = structural_low - buffer
-                        
-                        # 🛡️ RÈGLE D'OR : Ne JAMAIS reculer le SL
-                        current_sl = mt5_position.sl if mt5_position.sl > 0 else entry_price
-                        
-                        # S'assurer que le SL structurel est meilleur que l'actuel ET en profit
-                        if new_sl_structural > current_sl and new_sl_structural > entry_price:
-                            # Vérifier distances minimales MT5
-                            tick_info = mt5.symbol_info_tick(self.symbol)
-                            if tick_info:
-                                stops_level = getattr(symbol_info, 'trade_stops_level', 10)
-                                min_distance = max(stops_level * symbol_info.point, 10 * symbol_info.point)
-                                spread = symbol_info.spread * symbol_info.point
-                                safety_buffer_struct = max(min_distance * 2, 20 * symbol_info.point) + spread
-                                max_allowed_sl = tick_info.bid - safety_buffer_struct
-                                
-                                if new_sl_structural < max_allowed_sl:
-                                    safe_log(f"📊 TRAILING STOP STRUCTUREL - Ticket {ticket}")
-                                    safe_log(f"   📉 Plus bas {STRUCTURAL_TRAILING_LOOKBACK} bougies: {structural_low:.5f}")
-                                    safe_log(f"   🛡️ Buffer (0.3x ATR): -{buffer:.5f}")
-                                    safe_log(f"   🔄 SL: {current_sl:.5f} → {new_sl_structural:.5f}")
-                                    
-                                    profit_secured_pips = (new_sl_structural - entry_price) / symbol_info.point / 10
-                                    safe_log(f"   💰 Profit sécurisé: +{profit_secured_pips:.1f} pips")
-                                    
-                                    # Modifier le SL
-                                    request = {
-                                        "action": mt5.TRADE_ACTION_SLTP,
-                                        "symbol": self.symbol,
-                                        "position": ticket,
-                                        "sl": new_sl_structural,
-                                        "tp": mt5_position.tp,
-                                        "magic": mt5_position.magic,
-                                        "comment": "StructuralTrailing"
-                                    }
-                                    
-                                    try:
-                                        result = mt5.order_send(request)
-                                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-                                            safe_log(f"✅ TRAILING STRUCTUREL ACTIVÉ!")
-                                            continue  # Passer au ticket suivant
-                                        elif result:
-                                            # En cas d'erreur, on passe au trailing classique
-                                            safe_log(f"⚠️ Échec trailing structurel, passage au classique")
-                                    except Exception as e:
-                                        safe_log(f"⚠️ Erreur trailing structurel: {e}")
-
-                # 🚀 TRAILING STOP PROGRESSIF CLASSIQUE (PRIORITÉ 3 - fallback)
+                # 🚀 TRAILING STOP PROGRESSIF
                 if tp_progress_pct >= 30.0:
                     
                     # 📈 CALCUL DU NIVEAU DE SL PROGRESSIF - TOUJOURS POSITIF
@@ -1593,7 +1443,7 @@ class M5PullbackBot:
                         # Bon momentum → 50% du profit sécurisé
                         sl_profit_ratio = 0.50
                         phase = "MOMENTUM (50% profit)"
-                    elif tp_progress_pct >= 60.0:
+                    elif tp_progress_pct >= 35.0:
                         # Progression solide → 35% du profit sécurisé
                         sl_profit_ratio = 0.35
                         phase = "PROGRESSION (35% profit)"
@@ -1682,15 +1532,53 @@ class M5PullbackBot:
                     safe_log(f"   🎯 SL progressif: {new_sl_progressive:.5f} ({sl_profit_ratio*100:.0f}% du profit)")
                     safe_log(f"   💰 Profit garanti: +{guaranteed_profit_pips:.1f} pips")
                     
-                    # 🔒 MODIFICATION SÉCURISÉE DE LA POSITION SUR MT5
+                    # � EXTENSION DU TP SI PHASE QUASI-TP (sl_profit_ratio = 0.75)
+                    new_tp = mt5_position.tp  # Par défaut, garde le même TP
+                    tp_extended = False
+                    
+                    if sl_profit_ratio == 0.75:
+                        # 🔥 NOUVEAU : Tracking du dernier TP étendu (permet extensions multiples)
+                        if not hasattr(self, '_last_extended_tp'):
+                            self._last_extended_tp = {}  # {ticket: last_tp_value}
+                        
+                        # Vérifier si le TP a déjà été étendu à cette valeur exacte
+                        last_tp = self._last_extended_tp.get(ticket, 0)
+                        
+                        # Extension SEULEMENT si le TP actuel n'a pas encore été étendu
+                        if mt5_position.tp != last_tp:
+                            # Calcul du nouveau TP étendu de 50%
+                            current_tp_distance = mt5_position.tp - entry_price
+                            extended_tp_distance = current_tp_distance * 1.5  # +50%
+                            new_tp = entry_price + extended_tp_distance
+                            
+                            # Vérification que le nouveau TP est supérieur à l'ancien
+                            if new_tp > mt5_position.tp:
+                                tp_extended = True
+                                
+                                # Compter le nombre d'extensions pour ce ticket
+                                if not hasattr(self, '_tp_extension_count'):
+                                    self._tp_extension_count = {}
+                                extension_number = self._tp_extension_count.get(ticket, 0) + 1
+                                self._tp_extension_count[ticket] = extension_number
+                                
+                                # Mémoriser ce nouveau TP comme "dernier étendu"
+                                self._last_extended_tp[ticket] = new_tp
+                                
+                                safe_log(f"   🚀 EXTENSION TP +50% (#{extension_number}): {mt5_position.tp:.5f} → {new_tp:.5f}")
+                                safe_log(f"      💎 Nouveau potentiel de profit augmenté!")
+                                safe_log(f"      🔥 Extensions multiples : Continuera à 90% du nouveau TP")
+                            else:
+                                new_tp = mt5_position.tp  # Garde l'ancien si problème
+                    
+                    # �🔒 MODIFICATION SÉCURISÉE DE LA POSITION SUR MT5
                     request = {
                         "action": mt5.TRADE_ACTION_SLTP,
                         "symbol": self.symbol,
                         "position": ticket,
                         "sl": new_sl_progressive,
-                        "tp": mt5_position.tp,  # Garde le même TP
+                        "tp": new_tp,  # TP normal ou étendu selon la phase
                         "magic": mt5_position.magic,  # Sécurité supplémentaire
-                        "comment": f"TrailingStop-{phase[:8]}"  # Identifier la source
+                        "comment": f"TrailingStop-{phase[:8]}" + ("-TP+50%" if tp_extended else "")
                     }
                     
                     # Tentative de modification avec gestion d'erreur robuste
@@ -1703,6 +1591,9 @@ class M5PullbackBot:
                             safe_log(f"   💰 Progression: {tp_progress_pct:.1f}%")
                             safe_log(f"   🛡️ SL sécurisé: {new_sl_progressive:.5f}")
                             safe_log(f"   ✅ Profit minimum garanti: +{guaranteed_profit_pips:.1f} pips!")
+                            if tp_extended:
+                                safe_log(f"   🚀 TP ÉTENDU +50%: Nouveau TP = {new_tp:.5f}")
+                                safe_log(f"      💎 Potentiel de profit maximisé!")
                             
                         elif result:
                             # Gestion des erreurs spécifiques avec plus de détails
@@ -3791,16 +3682,11 @@ class M5PullbackBot:
         safe_log(f"🎯 TP/SL: Adaptatifs selon ATR | Breakeven progressif")
         
         # 🎯 Affichage des nouvelles fonctionnalités avancées
-        if ENABLE_SCALING_OUT or ENABLE_STRUCTURAL_TRAILING or ENABLE_DYNAMIC_TP:
+        if ENABLE_DYNAMIC_TP:
             safe_log(f"\n🚀 FONCTIONNALITÉS EXPERT ACTIVÉES:")
-            if ENABLE_SCALING_OUT:
-                safe_log(f"   💰 Scaling Out: Ferme {SCALING_OUT_CLOSE_PERCENT}% à {SCALING_OUT_TP_PERCENT}% du TP")
-            if ENABLE_STRUCTURAL_TRAILING:
-                safe_log(f"   📊 Trailing Structurel: Suit les {STRUCTURAL_TRAILING_LOOKBACK} dernières bougies")
-            if ENABLE_DYNAMIC_TP:
-                safe_log(f"   🎯 TP Dynamique: Ajuste le TP en temps réel selon la force du marché")
-                safe_log(f"      📈 Accélération (>{DYNAMIC_TP_STRENGTH_THRESHOLD}%): Éloigne TP +{(DYNAMIC_TP_EXTENSION_MULTIPLIER-1)*100:.0f}%")
-                safe_log(f"      📉 Essoufflement (RSI<{DYNAMIC_TP_RSI_WEAKNESS}): SL agressif à 80% profit")
+            safe_log(f"   🎯 TP Dynamique: Ajuste le TP en temps réel selon la force du marché")
+            safe_log(f"      📈 Accélération (>{DYNAMIC_TP_STRENGTH_THRESHOLD}%): Éloigne TP +{(DYNAMIC_TP_EXTENSION_MULTIPLIER-1)*100:.0f}%")
+            safe_log(f"      📉 Essoufflement (RSI<{DYNAMIC_TP_RSI_WEAKNESS}): SL agressif à 80% profit")
         
         safe_log(f"⏹️ Arrêt: Ctrl+C")
         safe_log("="*60)
