@@ -1536,7 +1536,7 @@ class M5PullbackBot:
                     new_tp = mt5_position.tp  # Par défaut, garde le même TP
                     tp_extended = False
                     
-                    if sl_profit_ratio == 0.75:
+                    if tp_progress_pct >= 75.0:
                         # 🔥 NOUVEAU : Tracking du dernier TP étendu (permet extensions multiples)
                         if not hasattr(self, '_last_extended_tp'):
                             self._last_extended_tp = {}  # {ticket: last_tp_value}
