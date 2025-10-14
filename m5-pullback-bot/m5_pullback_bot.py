@@ -2946,13 +2946,13 @@ class M5PullbackBot:
             # 🟢 Risque de BASE : 10% de l'equity
             # 🚀 Progression selon la force du signal
             if trend_strength >= 95.0:
-                risk_percent = 15  # 🎯 Risque élevé - Très forte certitude (1.5x le risque de base)
+                risk_percent = 30  # 🎯 Risque élevé - Très forte certitude (1.5x le risque de base)
                 risk_level = "ÉLEVÉ"
             elif trend_strength >= 90.0:
-                risk_percent = 10  # ⚡ Risque augmenté - Forte certitude (1.2x le risque de base)
+                risk_percent = 20  # ⚡ Risque augmenté - Forte certitude (1.2x le risque de base)
                 risk_level = "AUGMENTÉ"
             else:
-                risk_percent = 5  # 📊 Risque STANDARD - 10% de l'equity
+                risk_percent = 10  # 📊 Risque STANDARD - 10% de l'equity
                 risk_level = "STANDARD"
             
             # 🛡️ APPLICATION DU MODE DÉGRADÉ
@@ -3369,6 +3369,11 @@ class M5PullbackBot:
             del self.partial_trades[trade_id]
             return False
         
+        # ⏰ MISE À JOUR DU TIMESTAMP POUR COOLDOWN (5 minutes entre trades)
+        if trade_type == 'BUY':
+            self.last_buy_timestamp = datetime.now()
+            safe_log(f"⏰ Cooldown BUY activé - Prochain trade possible dans 5 minutes")
+        
         return True
     
     def execute_partial_entry_level(self, trade_id, level_index):
@@ -3493,6 +3498,21 @@ class M5PullbackBot:
         result = mt5.order_send(request)
         
         if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+            # 📝 AJOUT À self.open_positions pour breakeven/trailing
+            position_data = {
+                'ticket': result.order,
+                'type': 'BUY',
+                'open_price': tick_info.ask,
+                'open_time': datetime.now(),
+                'sl': trade['sl_price'],
+                'tp': trade['tp_price'],
+                'lot_size': lot_size,
+                'comment': f"PartialEntry_L{level['level']}"
+            }
+            self.open_positions.append(position_data)
+            self.buy_positions_count += 1
+            
+            safe_log(f"✅ Position ajoutée au tracking (breakeven/trailing activé)")
             return True, result.order
         else:
             safe_log(f"❌ Échec ordre niveau {level['level']}: {result.comment if result else 'Aucune réponse'}")
@@ -3533,6 +3553,46 @@ class M5PullbackBot:
         
         for trade_id in list(self.partial_trades.keys()):
             trade = self.partial_trades[trade_id]
+            
+            # 🔍 VÉRIFIER SI LES ORDRES LIMITES ONT ÉTÉ REMPLIS
+            for level in trade['entry_levels']:
+                if not level['filled'] and level['ticket']:
+                    # Vérifier si l'ordre limite existe toujours (pas rempli)
+                    orders = mt5.orders_get(ticket=level['ticket'])
+                    
+                    if not orders:
+                        # L'ordre n'existe plus → Il a été rempli !
+                        # Chercher la position correspondante
+                        positions = mt5.positions_get(symbol=self.symbol)
+                        
+                        for pos in positions:
+                            # Trouver la position créée par cet ordre
+                            if pos.comment == f"PartialEntry_L{level['level']}":
+                                level['filled'] = True
+                                level['ticket'] = pos.ticket
+                                level['fill_time'] = datetime.now()
+                                
+                                # 📝 AJOUT À self.open_positions pour breakeven/trailing
+                                position_data = {
+                                    'ticket': pos.ticket,
+                                    'type': 'BUY',
+                                    'open_price': pos.price_open,
+                                    'open_time': datetime.now(),
+                                    'sl': pos.sl,
+                                    'tp': pos.tp,
+                                    'lot_size': pos.volume,
+                                    'comment': pos.comment
+                                }
+                                self.open_positions.append(position_data)
+                                self.buy_positions_count += 1
+                                
+                                safe_log(f"✅ Niveau {level['level']} rempli automatiquement!")
+                                safe_log(f"   Ticket: #{pos.ticket}, Prix: {pos.price_open:.2f}$")
+                                safe_log(f"   📝 Position ajoutée au tracking (breakeven/trailing activé)")
+                                
+                                # Mettre à jour les stats du trade
+                                self.update_partial_trade_stats(trade_id)
+                                break
             
             # Vérifier timeout
             if current_time > trade['timeout'] and trade['status'] == 'PENDING':
