@@ -1984,16 +1984,27 @@ class M5PullbackBot:
             lows = [rate['low'] for rate in rates]
             closes = [rate['close'] for rate in rates]
             
-            # Trouver le plus bas récent (swing low) sur la période
-            recent_swing_low = min(lows[-lookback_candles:])
-            recent_swing_high = max(highs[-lookback_candles:])
-            
-            # Index du plus bas pour analyse
+            # 🎯 AMÉLIORATION: Trouver le DERNIER swing low LOCAL (pas le minimum absolu)
+            # Un swing low = une bougie dont le low est inférieur aux 2 bougies avant ET après
+            recent_swing_low = None
             swing_low_index = None
-            for i in range(len(lows) - lookback_candles, len(lows)):
-                if lows[i] == recent_swing_low:
+            
+            # Chercher en partant de la fin (plus récent) vers le début
+            for i in range(len(lows) - 2, 1, -1):  # Exclure les 2 dernières bougies (pas terminées)
+                current_low = lows[i]
+                # Vérifier si c'est un creux local (inférieur aux voisins)
+                if (current_low < lows[i-1] and current_low < lows[i-2] and 
+                    current_low < lows[i+1] and current_low < lows[i+2]):
+                    recent_swing_low = current_low
                     swing_low_index = i
                     break
+            
+            # Fallback si aucun swing low local trouvé → prendre le minimum des 5 dernières bougies
+            if recent_swing_low is None:
+                recent_swing_low = min(lows[-5:])
+                safe_log(f"⚠️ Aucun swing low local détecté → Fallback sur min(5 bougies)")
+            
+            recent_swing_high = max(highs[-lookback_candles:])
             
             # Calcul ATR pour marge de sécurité
             atr_values = []
@@ -2039,27 +2050,32 @@ class M5PullbackBot:
             # Pour BUY: SL sous le dernier swing low
             structural_sl = structural_data['swing_low'] - safety_margin
             
-            # Sécurité: SL ne doit pas être trop proche (minimum 2x ATR)
-            min_distance = current_atr * 2.0
+            # 🛡️ SÉCURITÉ RENFORCÉE: Distance SL plus stricte
+            min_distance = current_atr * 1.5  # Minimum réduit: 1.5x ATR (au lieu de 2x)
             min_allowed_sl = entry_price - min_distance
             
-            # Sécurité: SL ne doit pas être trop loin (maximum 5x ATR)
-            max_distance = current_atr * 5.0
+            # 🚨 SÉCURITÉ CRITIQUE: Distance maximale STRICTE
+            max_distance = current_atr * 3.0  # Maximum réduit: 3x ATR (au lieu de 5x)
             max_allowed_sl = entry_price - max_distance
             
             # Application des limites
             if structural_sl > min_allowed_sl:
                 structural_sl = min_allowed_sl
-                safe_log(f"🔧 SL ajusté: Trop proche → {structural_sl:.2f}")
+                safe_log(f"🔧 SL ajusté: Trop proche → {structural_sl:.2f} (min {min_distance:.2f} pts)")
             elif structural_sl < max_allowed_sl:
                 structural_sl = max_allowed_sl
-                safe_log(f"🔧 SL ajusté: Trop loin → {structural_sl:.2f}")
+                safe_log(f"🔧 SL ajusté: Trop loin → {structural_sl:.2f} (max {max_distance:.2f} pts)")
+            
+            # 🚨 VÉRIFICATION FINALE: Perte maximale autorisée
+            sl_distance_final = abs(entry_price - structural_sl)
+            max_loss_pips = sl_distance_final / 0.1  # Conversion en pips
             
             safe_log(f"🏗️ SL STRUCTUREL BUY:")
-            safe_log(f"   📉 Swing Low: {structural_data['swing_low']:.2f}")
+            safe_log(f"   📉 Swing Low détecté: {structural_data['swing_low']:.2f}")
             safe_log(f"   🛡️ Marge sécurité: -{safety_margin:.3f}")
             safe_log(f"   🎯 SL Final: {structural_sl:.2f}")
-            safe_log(f"   📏 Distance: {(entry_price - structural_sl):.2f} points ({((entry_price - structural_sl)/current_atr):.1f}x ATR)")
+            safe_log(f"   📏 Distance: {sl_distance_final:.2f} pts = {max_loss_pips:.1f} pips ({(sl_distance_final/current_atr):.1f}x ATR)")
+            safe_log(f"   ⚖️ Limites appliquées: [{max_distance:.2f} - {min_distance:.2f}] pts")
                    
         return structural_sl
 
@@ -3370,6 +3386,15 @@ class M5PullbackBot:
         # Calcul du ratio réel pour le logging
         actual_ratio = tp_distance / sl_distance
         tp_points = tp_pips * 10  # Conversion en points
+        
+        # 🚨 VALIDATION FINALE: Rejeter si SL trop large (risque excessif)
+        max_acceptable_sl_pips = 50  # Maximum 50 pips = 5$ pour XAUUSD
+        if sl_pips > max_acceptable_sl_pips:
+            safe_log(f"❌ TRADE REJETÉ: SL trop large!")
+            safe_log(f"   📏 SL calculé: {sl_pips:.1f} pips (>{max_acceptable_sl_pips} pips max)")
+            safe_log(f"   🛡️ Protection: Risque excessif détecté")
+            safe_log(f"   💡 Le marché est probablement trop volatil ou le swing low trop éloigné")
+            return False
         
         # Déterminer le type de SL utilisé
         sl_type = "STRUCTUREL" if structural_data else "ATR"
