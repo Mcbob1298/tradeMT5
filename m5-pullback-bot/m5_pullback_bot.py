@@ -218,11 +218,14 @@ class M5PullbackBot:
         # Variables système profit quotidien adaptatif
         self.daily_start_balance = 0  # Balance de départ du jour
         
-
+        # 🛡️ SYSTÈME DE CONFIRMATION SUR 3 CYCLES (Anti-faux signaux)
+        self.trend_confirmation_history = []  # Historique des 3 dernières tendances
+        self.required_confirmations = 3  # Nombre de cycles consécutifs requis
+        
 
 
         
-        # �🕐 HORAIRES DE TRADING - Arrêt du trading à 22h00, reprise à 00h00 (minuit)
+        # HORAIRES DE TRADING - Arrêt du trading à 22h00, reprise à 00h00 (minuit)
         self.daily_close_time = 22.0   # Heure d'arrêt du trading (22h00) - PLUS DE FERMETURE FORCÉE
         self.daily_start_time = 0.0    # Heure de reprise (00h00 - minuit)
         
@@ -1532,43 +1535,46 @@ class M5PullbackBot:
                     safe_log(f"   🎯 SL progressif: {new_sl_progressive:.5f} ({sl_profit_ratio*100:.0f}% du profit)")
                     safe_log(f"   💰 Profit garanti: +{guaranteed_profit_pips:.1f} pips")
                     
-                    # � EXTENSION DU TP SI PHASE QUASI-TP (sl_profit_ratio = 0.75)
+                    # 🚀 EXTENSION DU TP SI PHASE QUASI-TP (75% atteint)
                     new_tp = mt5_position.tp  # Par défaut, garde le même TP
                     tp_extended = False
                     
                     if tp_progress_pct >= 75.0:
-                        # 🔥 NOUVEAU : Tracking du dernier TP étendu (permet extensions multiples)
+                        # 🔥 TRACKING POUR EXTENSIONS MULTIPLES
                         if not hasattr(self, '_last_extended_tp'):
                             self._last_extended_tp = {}  # {ticket: last_tp_value}
+                        if not hasattr(self, '_tp_extension_count'):
+                            self._tp_extension_count = {}  # {ticket: number_of_extensions}
                         
-                        # Vérifier si le TP a déjà été étendu à cette valeur exacte
-                        last_tp = self._last_extended_tp.get(ticket, 0)
+                        # Récupérer le dernier TP étendu (0 si première fois)
+                        last_extended_tp = self._last_extended_tp.get(ticket, 0)
+                        current_tp = mt5_position.tp
                         
-                        # Extension SEULEMENT si le TP actuel n'a pas encore été étendu
-                        if mt5_position.tp != last_tp:
+                        # ✅ CORRECTION: Extension si le TP actuel est différent du dernier qu'on a étendu
+                        # Cela permet de détecter quand le prix a progressé vers un nouveau seuil
+                        if current_tp != last_extended_tp or last_extended_tp == 0:
                             # Calcul du nouveau TP étendu de 50%
-                            current_tp_distance = mt5_position.tp - entry_price
+                            current_tp_distance = current_tp - entry_price
                             extended_tp_distance = current_tp_distance * 1.5  # +50%
                             new_tp = entry_price + extended_tp_distance
                             
                             # Vérification que le nouveau TP est supérieur à l'ancien
-                            if new_tp > mt5_position.tp:
+                            if new_tp > current_tp:
                                 tp_extended = True
                                 
-                                # Compter le nombre d'extensions pour ce ticket
-                                if not hasattr(self, '_tp_extension_count'):
-                                    self._tp_extension_count = {}
+                                # Incrémenter le compteur d'extensions
                                 extension_number = self._tp_extension_count.get(ticket, 0) + 1
                                 self._tp_extension_count[ticket] = extension_number
                                 
-                                # Mémoriser ce nouveau TP comme "dernier étendu"
+                                # ✅ MÉMORISER CE NOUVEAU TP POUR COMPARAISON FUTURE
                                 self._last_extended_tp[ticket] = new_tp
                                 
-                                safe_log(f"   🚀 EXTENSION TP +50% (#{extension_number}): {mt5_position.tp:.5f} → {new_tp:.5f}")
+                                safe_log(f"   🚀 EXTENSION TP +50% (#{extension_number}): {current_tp:.5f} → {new_tp:.5f}")
                                 safe_log(f"      💎 Nouveau potentiel de profit augmenté!")
-                                safe_log(f"      🔥 Extensions multiples : Continuera à 90% du nouveau TP")
+                                safe_log(f"      🔥 Continuera à s'étendre à 75% du nouveau TP")
+                                safe_log(f"      📊 Progression actuelle: {tp_progress_pct:.1f}% du TP actuel")
                             else:
-                                new_tp = mt5_position.tp  # Garde l'ancien si problème
+                                new_tp = current_tp  # Garde l'ancien si problème
                     
                     # �🔒 MODIFICATION SÉCURISÉE DE LA POSITION SUR MT5
                     request = {
@@ -2832,23 +2838,41 @@ class M5PullbackBot:
             elif recent_change < -momentum_threshold:
                 recent_momentum = "BEARISH"
         
-        # 🚀 LOGIQUE COMBINÉE : Détection précoce des retournements baissiers
-        if recent_momentum == "BEARISH" or price_vs_ema50 == "BEARISH":
-            # Momentum baissier OU prix sous EMA50 = signal baissier prioritaire
-            trend_direction = "BEARISH"
-        elif recent_momentum == "BULLISH" and price_vs_ema50 == "BULLISH":
-            # Momentum haussier ET prix au-dessus EMA50 = signal haussier fort
-            trend_direction = "BULLISH"
-        elif price_trend == "BULLISH" and ema_trend == "BULLISH":
-            trend_direction = "BULLISH"     # Tendance claire haussière
-        elif price_trend == "BEARISH" and ema_trend == "BEARISH":
-            trend_direction = "BEARISH"     # Tendance claire baissière
-        elif price_trend == "BEARISH":      # Prix en baisse = signal prioritaire
-            trend_direction = "BEARISH"     # Le prix prime sur les EMAs
-        elif price_trend == "BULLISH":      # Prix en hausse = signal prioritaire
-            trend_direction = "BULLISH"     # Le prix prime sur les EMAs  
+        # 🚀 LOGIQUE COMBINÉE AVEC FILTRE DE STABILITÉ (évite les changements trop rapides)
+        # Règle: On ne change de tendance que si au moins 2 conditions concordent
+        
+        bullish_votes = 0
+        bearish_votes = 0
+        
+        # Vote 1: Position du prix vs EMA 200 (tendance de fond)
+        if price_trend == "BULLISH":
+            bullish_votes += 1
         else:
-            trend_direction = "SIDEWAYS"    # Situation neutre
+            bearish_votes += 1
+        
+        # Vote 2: Position de l'EMA 50 vs EMA 200 (alignement EMAs)
+        if ema_trend == "BULLISH":
+            bullish_votes += 1
+        else:
+            bearish_votes += 1
+        
+        # Vote 3: Momentum récent (si significatif)
+        if recent_momentum == "BULLISH":
+            bullish_votes += 1
+        elif recent_momentum == "BEARISH":
+            bearish_votes += 1
+        
+        # 🎯 DÉCISION AVEC MAJORITÉ (au moins 2 votes sur 3)
+        if bullish_votes >= 2:
+            trend_direction = "BULLISH"
+        elif bearish_votes >= 2:
+            trend_direction = "BEARISH"
+        else:
+            # Égalité ou indécision → Garder la tendance précédente pour stabilité
+            if hasattr(self, 'trend_data') and self.trend_data['current_trend'] in ['BULLISH', 'BEARISH']:
+                trend_direction = self.trend_data['current_trend']
+            else:
+                trend_direction = "SIDEWAYS"
         
         # 🎯 CALCUL QUALITÉ DU PULLBACK (Distance à l'EMA 50)
         distance_to_pullback_ema = abs(current_price - current_ema_pullback)
@@ -3118,7 +3142,50 @@ class M5PullbackBot:
         if trend == "BEARISH":
             # Message minimal pour tendance baissière (bot ne trade pas en BEARISH)
             safe_log(f"📉 Tendance BEARISH détectée → Bot en attente de tendance BULLISH")
+            # Reset de l'historique de confirmation
+            self.trend_confirmation_history = []
             return None
+        
+        # 🛡️ SYSTÈME DE CONFIRMATION SUR 3 CYCLES CONSÉCUTIFS
+        # Enregistre la tendance actuelle (BULLISH uniquement car BEARISH déjà filtré)
+        current_trend_data = {
+            'trend': trend,
+            'strength': strength,
+            'timestamp': current_time,
+            'pullback_quality': pullback_quality
+        }
+        
+        # Ajouter la détection actuelle à l'historique
+        self.trend_confirmation_history.append(current_trend_data)
+        
+        # Garder seulement les 3 dernières détections
+        if len(self.trend_confirmation_history) > self.required_confirmations:
+            self.trend_confirmation_history.pop(0)
+        
+        # Vérifier si on a 3 confirmations BULLISH consécutives
+        if len(self.trend_confirmation_history) < self.required_confirmations:
+            confirmations_count = len(self.trend_confirmation_history)
+            safe_log(f"⏳ CONFIRMATION {confirmations_count}/{self.required_confirmations} - "
+                    f"Attente de {self.required_confirmations - confirmations_count} cycle(s) BULLISH supplémentaire(s)")
+            safe_log(f"   📊 Tendance actuelle: {trend} {strength:.1f}%")
+            return None
+        
+        # Vérifier que les 3 dernières sont toutes BULLISH avec force >= 80%
+        all_bullish = all(
+            h['trend'] == 'BULLISH' and h['strength'] >= 80 
+            for h in self.trend_confirmation_history
+        )
+        
+        if not all_bullish:
+            safe_log(f"❌ CONFIRMATION INCOMPLÈTE - Les 3 derniers cycles ne sont pas tous BULLISH ≥80%")
+            for i, h in enumerate(self.trend_confirmation_history, 1):
+                safe_log(f"   Cycle {i}: {h['trend']} {h['strength']:.1f}%")
+            return None
+        
+        # ✅ 3 CONFIRMATIONS BULLISH VALIDÉES !
+        safe_log(f"✅ 3 CONFIRMATIONS BULLISH CONSÉCUTIVES VALIDÉES!")
+        for i, h in enumerate(self.trend_confirmation_history, 1):
+            safe_log(f"   Cycle {i}: {h['trend']} {h['strength']:.1f}% - Pullback: {h['pullback_quality']:.0f}%")
         
         # 🎯 FILTRE QUALITÉ ULTRA-STRICT : 80% de certitude sur la tendance
         if strength < 80:  # ⚡ NOUVEAU SEUIL : 80% minimum (au lieu de 70%)
@@ -3331,8 +3398,7 @@ class M5PullbackBot:
         if current_positions >= MAX_POSITIONS:
             safe_log(f"🚫 Trade annulé - Limite positions atteinte ({current_positions}/{MAX_POSITIONS})")
             return False
-        
-        # �🕐 MISE À JOUR TIMESTAMP selon le type de trade
+        # MISE A JOUR TIMESTAMP selon le type de trade
         if trade_type == 'BUY':
             self.last_buy_timestamp = datetime.now()
         
