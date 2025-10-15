@@ -1448,24 +1448,40 @@ class M5PullbackBot:
                     safe_log(f"   🎯 SL progressif: {new_sl_progressive:.5f} ({sl_profit_ratio*100:.0f}% du profit)")
                     safe_log(f"   💰 Profit garanti: +{guaranteed_profit_pips:.1f} pips")
                     
-                    # 🚀 EXTENSION DU TP SI PHASE QUASI-TP (75% atteint)
+                    # 🚀 EXTENSION DU TP BASÉE SUR LA PROGRESSION (Système Simplifié)
                     new_tp = mt5_position.tp  # Par défaut, garde le même TP
                     tp_extended = False
                     
-                    if tp_progress_pct >= 75.0:
-                        # 🔥 TRACKING POUR EXTENSIONS MULTIPLES
-                        if not hasattr(self, '_last_extended_tp'):
-                            self._last_extended_tp = {}  # {ticket: last_tp_value}
-                        if not hasattr(self, '_tp_extension_count'):
-                            self._tp_extension_count = {}  # {ticket: number_of_extensions}
+                    if tp_progress_pct >= 50.0:
+                        # 🔥 TRACKING POUR EXTENSIONS MULTIPLES ILLIMITÉES
+                        if not hasattr(self, '_tp_extension_tracking'):
+                            self._tp_extension_tracking = {}  # {ticket: {'last_tp': value, 'count': number, 'last_progress': pct}}
                         
-                        # Récupérer le dernier TP étendu (0 si première fois)
-                        last_extended_tp = self._last_extended_tp.get(ticket, 0)
+                        # Initialiser le tracking pour ce ticket si première fois
+                        if ticket not in self._tp_extension_tracking:
+                            self._tp_extension_tracking[ticket] = {
+                                'last_tp': mt5_position.tp,
+                                'count': 0,
+                                'last_progress': 0
+                            }
+                        
+                        tracking = self._tp_extension_tracking[ticket]
                         current_tp = mt5_position.tp
                         
-                        # ✅ CORRECTION: Extension si le TP actuel est différent du dernier qu'on a étendu
-                        # Cela permet de détecter quand le prix a progressé vers un nouveau seuil
-                        if current_tp != last_extended_tp or last_extended_tp == 0:
+                        # ✅ LOGIQUE SIMPLE : Extension dès que 50% atteint, puis tous les 50% suivants
+                        should_extend = False
+                        
+                        if tracking['count'] == 0:
+                            # Première extension : dès que 50% est atteint
+                            should_extend = True
+                            extension_reason = "Premier seuil 50% atteint"
+                        else:
+                            # Extensions suivantes : tous les 50% de progression vers le nouveau TP
+                            if tp_progress_pct >= 50.0:
+                                should_extend = True
+                                extension_reason = f"Progression {tp_progress_pct:.1f}% >= 50%"
+                        
+                        if should_extend:
                             # Calcul du nouveau TP étendu de 50%
                             current_tp_distance = current_tp - entry_price
                             extended_tp_distance = current_tp_distance * 1.5  # +50%
@@ -1475,17 +1491,17 @@ class M5PullbackBot:
                             if new_tp > current_tp:
                                 tp_extended = True
                                 
-                                # Incrémenter le compteur d'extensions
-                                extension_number = self._tp_extension_count.get(ticket, 0) + 1
-                                self._tp_extension_count[ticket] = extension_number
+                                # Mise à jour du tracking
+                                tracking['count'] += 1
+                                tracking['last_tp'] = new_tp
+                                tracking['last_progress'] = 0  # Reset progression pour prochain cycle
                                 
-                                # ✅ MÉMORISER CE NOUVEAU TP POUR COMPARAISON FUTURE
-                                self._last_extended_tp[ticket] = new_tp
+                                extension_number = tracking['count']
                                 
                                 safe_log(f"   🚀 EXTENSION TP +50% (#{extension_number}): {current_tp:.5f} → {new_tp:.5f}")
-                                safe_log(f"      💎 Nouveau potentiel de profit augmenté!")
-                                safe_log(f"      🔥 Continuera à s'étendre à 75% du nouveau TP")
-                                safe_log(f"      📊 Progression actuelle: {tp_progress_pct:.1f}% du TP actuel")
+                                safe_log(f"      💎 Raison: {extension_reason}")
+                                safe_log(f"      🔥 Prochain objectif: 50% du nouveau TP")
+                                safe_log(f"      📊 Progression vers nouveau TP: 0% (reset)")
                             else:
                                 new_tp = current_tp  # Garde l'ancien si problème
                     
@@ -1651,53 +1667,86 @@ class M5PullbackBot:
                 continue  # TP invalide
             
             # ═══════════════════════════════════════════════════════════
-            # 🚀 RÈGLE 1 : ÉLOIGNER LE TP SI LE MARCHÉ ACCÉLÈRE
+            # 🚀 EXTENSION TP AUTOMATIQUE BASÉE SUR PROGRESSION UNIQUEMENT
             # ═══════════════════════════════════════════════════════════
-            if (current_strength >= DYNAMIC_TP_STRENGTH_THRESHOLD and 
-                tp_progress_pct >= DYNAMIC_TP_MIN_PROFIT_PERCENT and
-                ticket not in self._dynamic_tp_modified):
+            # Système simplifié : Extension dès que 50% atteint, puis tous les 50% suivants
+            
+            if tp_progress_pct >= 50.0:
+                # 🔥 TRACKING POUR EXTENSIONS MULTIPLES ILLIMITÉES
+                if not hasattr(self, '_dynamic_tp_tracking'):
+                    self._dynamic_tp_tracking = {}  # {ticket: {'last_tp': value, 'count': number}}
                 
-                # Calcul du nouveau TP étendu
-                current_tp_distance = current_tp - entry_price
-                new_tp_distance = current_tp_distance * DYNAMIC_TP_EXTENSION_MULTIPLIER
-                new_tp = entry_price + new_tp_distance
-                
-                # Vérifier amélioration significative (min 10 points)
-                tp_improvement = new_tp - current_tp
-                if tp_improvement >= DYNAMIC_TP_MIN_IMPROVEMENT:
-                    
-                    safe_log(f"🚀 TP DYNAMIQUE - ACCÉLÉRATION MARCHÉ!")
-                    safe_log(f"   🎫 Ticket: {ticket}")
-                    safe_log(f"   📊 Force actuelle: {current_strength:.1f}% (seuil: {DYNAMIC_TP_STRENGTH_THRESHOLD}%)")
-                    safe_log(f"   💪 Force à l'ouverture: {opening_strength:.1f}%")
-                    safe_log(f"   📈 Gain de force: +{current_strength - opening_strength:.1f}%")
-                    safe_log(f"   📊 Progression: {tp_progress_pct:.1f}% du TP")
-                    safe_log(f"   🎯 TP actuel: {current_tp:.5f}")
-                    safe_log(f"   🎯 Nouveau TP: {new_tp:.5f} (+{tp_improvement*10000:.1f} pips)")
-                    safe_log(f"   💡 Extension: +{(DYNAMIC_TP_EXTENSION_MULTIPLIER - 1)*100:.0f}% pour capturer l'accélération")
-                    
-                    # Modification du TP sur MT5
-                    request = {
-                        "action": mt5.TRADE_ACTION_SLTP,
-                        "symbol": self.symbol,
-                        "position": ticket,
-                        "sl": mt5_position.sl,
-                        "tp": new_tp,
-                        "magic": mt5_position.magic,
-                        "comment": "DynamicTP-Extend"
+                # Initialiser le tracking pour ce ticket si première fois
+                if ticket not in self._dynamic_tp_tracking:
+                    self._dynamic_tp_tracking[ticket] = {
+                        'last_tp': current_tp,
+                        'count': 0
                     }
+                
+                tracking = self._dynamic_tp_tracking[ticket]
+                
+                # ✅ LOGIQUE ULTRA-SIMPLE : Extension tous les 50% de progression
+                should_extend = False
+                extension_reason = ""
+                
+                if tracking['count'] == 0:
+                    # Première extension : dès que 50% atteint
+                    should_extend = True
+                    extension_reason = f"Progression {tp_progress_pct:.1f}% >= 50%"
+                else:
+                    # Extensions suivantes : tous les 50% du nouveau TP
+                    # On vérifie que le TP actuel correspond au dernier TP enregistré
+                    if abs(current_tp - tracking['last_tp']) < 0.00001 and tp_progress_pct >= 50.0:
+                        should_extend = True
+                        extension_reason = f"Progression {tp_progress_pct:.1f}% >= 50% vers nouveau TP"
+                
+                if should_extend:
+                    # Calcul du nouveau TP étendu
+                    current_tp_distance = current_tp - entry_price
+                    new_tp_distance = current_tp_distance * DYNAMIC_TP_EXTENSION_MULTIPLIER
+                    new_tp = entry_price + new_tp_distance
                     
-                    try:
-                        result = mt5.order_send(request)
-                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-                            safe_log(f"✅ TP ÉTENDU AVEC SUCCÈS!")
-                            safe_log(f"   🎯 Potentiel de gain augmenté de {tp_improvement * 10000:.1f} pips")
-                            self._dynamic_tp_modified.add(ticket)
-                        else:
-                            error_msg = getattr(result, 'comment', "Erreur inconnue") if result else "Aucune réponse"
-                            safe_log(f"❌ Échec extension TP: {error_msg}")
-                    except Exception as e:
-                        safe_log(f"❌ Erreur modification TP dynamique: {e}")
+                    # Vérifier amélioration significative (min 10 points)
+                    tp_improvement = new_tp - current_tp
+                    if tp_improvement >= DYNAMIC_TP_MIN_IMPROVEMENT:
+                        
+                        # Mise à jour du tracking
+                        tracking['count'] += 1
+                        tracking['last_tp'] = new_tp
+                        
+                        extension_number = tracking['count']
+                        
+                        safe_log(f"🚀 TP AUTOMATIQUE - EXTENSION #{extension_number}!")
+                        safe_log(f"   🎫 Ticket: {ticket}")
+                        safe_log(f"   💎 Raison: {extension_reason}")
+                        safe_log(f"   📊 Progression vers TP actuel: {tp_progress_pct:.1f}%")
+                        safe_log(f"   🎯 TP actuel: {current_tp:.5f}")
+                        safe_log(f"   🎯 Nouveau TP: {new_tp:.5f} (+{tp_improvement*10000:.1f} pips)")
+                        safe_log(f"   💡 Extension: +{(DYNAMIC_TP_EXTENSION_MULTIPLIER - 1)*100:.0f}%")
+                        safe_log(f"   🔥 Prochain objectif: 50% du nouveau TP")
+                        
+                        # Modification du TP sur MT5
+                        request = {
+                            "action": mt5.TRADE_ACTION_SLTP,
+                            "symbol": self.symbol,
+                            "position": ticket,
+                            "sl": mt5_position.sl,
+                            "tp": new_tp,
+                            "magic": mt5_position.magic,
+                            "comment": f"AutoTP-Ext{extension_number}"
+                        }
+                        
+                        try:
+                            result = mt5.order_send(request)
+                            if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                safe_log(f"✅ TP ÉTENDU AVEC SUCCÈS (Extension #{extension_number})!")
+                                safe_log(f"   🎯 Potentiel de gain augmenté de {tp_improvement * 10000:.1f} pips")
+                                safe_log(f"   � Cycle se répète tous les 50% de progression")
+                            else:
+                                error_msg = getattr(result, 'comment', "Erreur inconnue") if result else "Aucune réponse"
+                                safe_log(f"❌ Échec extension TP: {error_msg}")
+                        except Exception as e:
+                            safe_log(f"❌ Erreur modification TP: {e}")
             
             # ═══════════════════════════════════════════════════════════
             # 📉 RÈGLE 2 : SÉCURISER SI LE MARCHÉ S'ESSOUFFLE
