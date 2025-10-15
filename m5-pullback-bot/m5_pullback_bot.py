@@ -222,22 +222,6 @@ class M5PullbackBot:
         self.trend_confirmation_history = []  # Historique des 3 dernières tendances
         self.required_confirmations = 3  # Nombre de cycles consécutifs requis
         
-        # 🎯 SYSTÈME D'ENTRÉES ÉCHELONNÉES (Scaling-In)
-        # Configuration : 50% / 30% / 20% avec espacement 0.5×ATR et 1.0×ATR
-        self.partial_entries_enabled = True  # Activer le système d'entrées partielles
-        self.entry_levels = [
-            {'percentage': 0.50, 'offset_multiplier': 0.0},   # Niveau 1: 50% au signal
-            {'percentage': 0.30, 'offset_multiplier': 0.5},   # Niveau 2: 30% à -0.5×ATR
-            {'percentage': 0.20, 'offset_multiplier': 1.0}    # Niveau 3: 20% à -1.0×ATR
-        ]
-        self.entry_timeout_minutes = 15  # Timeout de 15 min par niveau
-        
-        # Tracking des trades partiels en cours
-        self.partial_trades = {}  # {trade_id: {...trade_info...}}
-        self.next_trade_id = 1  # Compteur pour IDs uniques
-
-
-        
         # HORAIRES DE TRADING - Arrêt du trading à 22h00, reprise à 00h00 (minuit)
         self.daily_close_time = 22.0   # Heure d'arrêt du trading (22h00) - PLUS DE FERMETURE FORCÉE
         self.daily_start_time = 0.0    # Heure de reprise (00h00 - minuit)
@@ -1899,8 +1883,8 @@ class M5PullbackBot:
             safe_log(f"✅ VOLATILITÉ OPTIMALE: ATR {current_atr:.2f} dans la plage [{OPTIMAL_ATR_MIN}-{OPTIMAL_ATR_MAX}]")
             return True
 
-    def find_structural_levels(self, symbol, lookback_candles=10):
-        """🏗️ STOP LOSS STRUCTUREL: Trouve les niveaux techniques d'invalidation"""
+    def find_structural_levels(self, symbol, lookback_candles=15):
+        """🏗️ STOP LOSS STRUCTUREL AMÉLIORÉ: Trouve les niveaux techniques d'invalidation avec fallback robuste"""
         try:
             # Récupérer les données des dernières bougies pour analyse structurelle
             rates = mt5.copy_rates_from_pos(symbol, TIMEFRAME, 0, lookback_candles + 5)
@@ -1919,7 +1903,6 @@ class M5PullbackBot:
             swing_low_index = None
             
             # Chercher en partant de l'avant-dernière bougie possible vers le début
-            # ✅ FIX: range(len(lows) - 3, 2, -1) évite "list index out of range"
             for i in range(len(lows) - 3, 2, -1):
                 current_low = lows[i]
                 # Vérifier si c'est un creux local (inférieur aux voisins)
@@ -1929,10 +1912,13 @@ class M5PullbackBot:
                     swing_low_index = i
                     break
             
-            # Fallback si aucun swing low local trouvé → prendre le minimum des 5 dernières bougies
+            # +++ NOUVELLE LOGIQUE DE FALLBACK PLUS SÛRE +++
+            # Si aucun swing low clair n'est trouvé, on prend le minimum des 10 dernières bougies.
+            # C'est plus sûr que 5, qui peut être trop proche du prix actuel dans une tendance forte.
             if recent_swing_low is None:
-                recent_swing_low = min(lows[-5:])
-                safe_log(f"⚠️ Aucun swing low local détecté → Fallback sur min(5 bougies)")
+                lookback_fallback = 10
+                recent_swing_low = min(lows[-lookback_fallback:])
+                safe_log(f"⚠️ Aucun swing low local détecté → Fallback sur min({lookback_fallback} bougies)")
             
             recent_swing_high = max(highs[-lookback_candles:])
             
@@ -1947,7 +1933,7 @@ class M5PullbackBot:
             
             current_atr = sum(atr_values) / len(atr_values) if atr_values else 0.01
             
-            safe_log(f"🏗️ ANALYSE STRUCTURELLE:")
+            safe_log(f"🏗️ ANALYSE STRUCTURELLE AMÉLIORÉE:")
             safe_log(f"   📊 Période analysée: {lookback_candles} bougies")
             safe_log(f"   📉 Swing Low: {recent_swing_low:.2f}")
             safe_log(f"   📈 Swing High: {recent_swing_high:.2f}")
@@ -1966,7 +1952,7 @@ class M5PullbackBot:
             return None
 
     def calculate_structural_stop_loss(self, trade_type, entry_price, structural_data):
-        """🎯 CALCUL SL STRUCTUREL: SL basé sur l'invalidation technique du scénario"""
+        """🎯 CALCUL SL STRUCTUREL DYNAMIQUE: SL basé sur l'invalidation technique ET la volatilité"""
         if not structural_data:
             # Fallback sur SL classique ATR si analyse structurelle impossible
             fallback_sl = entry_price - (structural_data['atr'] if structural_data else 0.01) * 2.5
@@ -1974,40 +1960,62 @@ class M5PullbackBot:
             return fallback_sl
         
         current_atr = structural_data['atr']
-        safety_margin = current_atr * 0.5  # Marge de sécurité: 0.5x ATR
+        
+        # +++ NOUVELLE LOGIQUE ADAPTATIVE +++
+        # La marge de sécurité et les limites s'adaptent à la volatilité (ATR)
+        # Marché calme (ATR bas) -> Risque plus serré
+        # Marché volatil (ATR haut) -> On laisse plus d'espace
+        if current_atr < 2.5:  # Marché calme
+            safety_margin_multiplier = 0.5
+            min_multiplier = 1.8
+            max_multiplier = 3.0
+            volatility_level = "CALME"
+        elif current_atr < 5.0:  # Marché normal
+            safety_margin_multiplier = 0.75
+            min_multiplier = 2.0
+            max_multiplier = 3.5
+            volatility_level = "NORMAL"
+        else:  # Marché très volatil
+            safety_margin_multiplier = 1.0  # Marge plus grande
+            min_multiplier = 2.5  # SL minimum plus éloigné pour éviter le bruit
+            max_multiplier = 4.0  # SL maximum plus large pour absorber la volatilité
+            volatility_level = "VOLATIL"
+
+        safety_margin = current_atr * safety_margin_multiplier
         
         if trade_type == 'BUY':
             # Pour BUY: SL sous le dernier swing low
             structural_sl = structural_data['swing_low'] - safety_margin
             
-            # 🛡️ SÉCURITÉ RENFORCÉE: Distance SL plus stricte
-            min_distance = current_atr * 1.5  # Minimum réduit: 1.5x ATR (au lieu de 2x)
+            min_distance = current_atr * min_multiplier
             min_allowed_sl = entry_price - min_distance
             
-            # 🚨 SÉCURITÉ CRITIQUE: Distance maximale STRICTE
-            max_distance = current_atr * 3.0  # Maximum réduit: 3x ATR (au lieu de 5x)
+            max_distance = current_atr * max_multiplier
             max_allowed_sl = entry_price - max_distance
             
-            # Application des limites
+            # Application des limites dynamiques
+            adjusted_reason = ""
+            final_sl = structural_sl
             if structural_sl > min_allowed_sl:
-                structural_sl = min_allowed_sl
-                safe_log(f"🔧 SL ajusté: Trop proche → {structural_sl:.2f} (min {min_distance:.2f} pts)")
+                final_sl = min_allowed_sl
+                adjusted_reason = f"Ajusté (trop proche) → min {min_multiplier}x ATR"
             elif structural_sl < max_allowed_sl:
-                structural_sl = max_allowed_sl
-                safe_log(f"🔧 SL ajusté: Trop loin → {structural_sl:.2f} (max {max_distance:.2f} pts)")
+                final_sl = max_allowed_sl
+                adjusted_reason = f"Ajusté (trop loin) → max {max_multiplier}x ATR"
             
-            # 🚨 VÉRIFICATION FINALE: Perte maximale autorisée
-            sl_distance_final = abs(entry_price - structural_sl)
+            sl_distance_final = abs(entry_price - final_sl)
             max_loss_pips = sl_distance_final / 0.1  # Conversion en pips
             
-            safe_log(f"🏗️ SL STRUCTUREL BUY:")
-            safe_log(f"   📉 Swing Low détecté: {structural_data['swing_low']:.2f}")
-            safe_log(f"   🛡️ Marge sécurité: -{safety_margin:.3f}")
-            safe_log(f"   🎯 SL Final: {structural_sl:.2f}")
+            safe_log(f"🏗️ SL STRUCTUREL DYNAMIQUE (BUY - Volatilité: {volatility_level}):")
+            safe_log(f"   📉 Swing Low: {structural_data['swing_low']:.2f} | Marge: -{safety_margin:.3f} ({safety_margin_multiplier}x ATR)")
+            safe_log(f"   🎯 SL Structurel brut: {structural_sl:.2f}")
+            if adjusted_reason:
+                safe_log(f"   🔧 {adjusted_reason}")
+            safe_log(f"   ✅ SL Final: {final_sl:.2f}")
             safe_log(f"   📏 Distance: {sl_distance_final:.2f} pts = {max_loss_pips:.1f} pips ({(sl_distance_final/current_atr):.1f}x ATR)")
-            safe_log(f"   ⚖️ Limites appliquées: [{max_distance:.2f} - {min_distance:.2f}] pts")
+            safe_log(f"   ⚖️ Fourchette de risque autorisée: [{max_distance:.2f} - {min_distance:.2f}] pts")
                    
-        return structural_sl
+        return final_sl
 
     def log_detailed_market_analysis(self, trend, strength, indicators, rejection_reason=""):
         """📊 DIAGNOSTIC ULTRA-DÉTAILLÉ: Affiche toutes les informations d'analyse pour comprendre les décisions"""
@@ -2946,13 +2954,13 @@ class M5PullbackBot:
             # 🟢 Risque de BASE : 10% de l'equity
             # 🚀 Progression selon la force du signal
             if trend_strength >= 95.0:
-                risk_percent = 30  # 🎯 Risque élevé - Très forte certitude (1.5x le risque de base)
+                risk_percent = 10  # 🎯 Risque élevé - Très forte certitude (1.5x le risque de base)
                 risk_level = "ÉLEVÉ"
             elif trend_strength >= 90.0:
-                risk_percent = 20  # ⚡ Risque augmenté - Forte certitude (1.2x le risque de base)
+                risk_percent = 5  # ⚡ Risque augmenté - Forte certitude (1.2x le risque de base)
                 risk_level = "AUGMENTÉ"
             else:
-                risk_percent = 10  # 📊 Risque STANDARD - 10% de l'equity
+                risk_percent = 2.5  # 📊 Risque STANDARD - 2.5% de l'equity
                 risk_level = "STANDARD"
             
             # 🛡️ APPLICATION DU MODE DÉGRADÉ
@@ -3166,13 +3174,10 @@ class M5PullbackBot:
             else:
                 time_since_last_buy = (current_time - self.last_buy_timestamp).total_seconds()
         
-        # 🎯 Vérification limites globales - Basée sur le nombre de STRATÉGIES en cours
-        # au lieu du nombre de positions individuelles (important pour entrées échelonnées)
-        current_strategies = len([t for t in self.partial_trades.values() 
-                                  if t['status'] in ['PENDING', 'ACTIVE']])
+        # 🎯 Vérification limites globales - Basée sur le nombre de positions ouvertes
         max_positions_adaptatif = self.calculate_adaptive_max_positions()
-        if current_strategies >= max_positions_adaptatif:
-            safe_log(f"🚫 Trade rejeté - Limite de stratégies simultanées atteinte ({current_strategies}/{max_positions_adaptatif})")
+        if self.buy_positions_count >= max_positions_adaptatif:
+            safe_log(f"🚫 Trade rejeté - Limite de positions simultanées atteinte ({self.buy_positions_count}/{max_positions_adaptatif})")
             return None
         
         # 🟢 STRATÉGIE 1: ACHAT SUR PULLBACK HAUSSIER (BUY)
@@ -3258,409 +3263,6 @@ class M5PullbackBot:
         # Aucune condition remplie
         return None
     
-    def create_partial_entry_trade(self, signal):
-        """
-        🎯 CRÉATION D'UN TRADE AVEC ENTRÉES ÉCHELONNÉES
-        ================================================
-        
-        Stratégie : 50% / 30% / 20% avec espacement 0.5×ATR et 1.0×ATR
-        
-        Avantages :
-        - Meilleur prix moyen si le marché fait une mèche
-        - SL structurel large qui résiste aux mèches
-        - Risque global maîtrisé (calculé sur la position totale)
-        """
-        if not self.partial_entries_enabled:
-            # Fallback sur entrée unique classique
-            return self.execute_m5_trade(signal)
-        
-        # 🔒 VÉRIFICATION LIMITE DE TRADES LOGIQUES (pas positions MT5)
-        active_partial_trades = len([t for t in self.partial_trades.values() 
-                                     if t['status'] in ['PENDING', 'ACTIVE']])
-        
-        # Si on a déjà 20 trades échelonnés actifs, on bloque
-        if active_partial_trades >= MAX_POSITIONS:
-            safe_log(f"🚫 Trade échelonné annulé - Limite trades logiques atteinte")
-            safe_log(f"   📊 Trades échelonnés actifs: {active_partial_trades}/{MAX_POSITIONS}")
-            safe_log(f"   💡 Chaque trade échelonné = 1 trade logique (même avec 3 entrées)")
-            return False
-        
-        trade_type = signal['type']
-        atr_value = signal['atr']
-        entry_price = signal.get('price', None)
-        trend_strength = signal.get('strength', 50)
-        
-        # Calcul du SL structurel (même logique que execute_m5_trade)
-        tick_info = mt5.symbol_info_tick(self.symbol)
-        if not tick_info:
-            return False
-        
-        if trade_type == 'BUY':
-            initial_price = tick_info.ask
-        else:
-            return False  # On ne trade que les BUY
-        
-        # Analyse structurelle pour SL
-        structural_data = self.find_structural_levels(self.symbol, lookback_candles=10)
-        if structural_data:
-            sl_price = self.calculate_structural_stop_loss(trade_type, initial_price, structural_data)
-            sl_distance = abs(initial_price - sl_price)
-        else:
-            sl_distance = 2.5 * atr_value
-            sl_price = initial_price - sl_distance
-        
-        # Calcul TP
-        tp_distance = self.calculate_market_aware_tp_ratio(trend_strength, atr_value, sl_distance)
-        tp_price = initial_price + tp_distance
-        
-        # 🎯 CALCUL DES NIVEAUX D'ENTRÉE
-        entry_levels_prices = []
-        for level in self.entry_levels:
-            offset = level['offset_multiplier'] * atr_value
-            level_price = initial_price - offset  # Pour BUY, on descend
-            entry_levels_prices.append({
-                'level': len(entry_levels_prices) + 1,
-                'percentage': level['percentage'],
-                'price': level_price,
-                'filled': False,
-                'ticket': None,
-                'fill_time': None
-            })
-        
-        # Création du trade ID unique
-        trade_id = f"PARTIAL_{self.next_trade_id}"
-        self.next_trade_id += 1
-        
-        # Stockage des informations du trade partiel
-        self.partial_trades[trade_id] = {
-            'trade_id': trade_id,
-            'type': trade_type,
-            'signal': signal,
-            'initial_price': initial_price,
-            'sl_price': sl_price,
-            'tp_price': tp_price,
-            'atr': atr_value,
-            'entry_levels': entry_levels_prices,
-            'start_time': datetime.now(),
-            'timeout': datetime.now() + timedelta(minutes=self.entry_timeout_minutes),
-            'status': 'PENDING',  # PENDING, ACTIVE, COMPLETED, CANCELLED
-            'filled_percentage': 0.0,
-            'weighted_avg_price': 0.0,
-            'total_lot_size': 0.0
-        }
-        
-        safe_log(f"")
-        safe_log(f"🎯 NOUVEAU TRADE AVEC ENTRÉES ÉCHELONNÉES #{trade_id}")
-        safe_log(f"="*70)
-        safe_log(f"📊 Configuration : Pyramide inversée 50% / 30% / 20%")
-        safe_log(f"   Niveau 1: {entry_levels_prices[0]['price']:.2f}$ (50%) - IMMÉDIAT")
-        safe_log(f"   Niveau 2: {entry_levels_prices[1]['price']:.2f}$ (30%) - Si prix descend de {0.5*atr_value:.2f}$")
-        safe_log(f"   Niveau 3: {entry_levels_prices[2]['price']:.2f}$ (20%) - Si prix descend de {1.0*atr_value:.2f}$")
-        safe_log(f"🎯 SL structurel: {sl_price:.2f}$ (unique pour toutes les entrées)")
-        safe_log(f"🚀 TP initial: {tp_price:.2f}$ (sera recalculé selon prix moyen)")
-        safe_log(f"⏱️ Timeout: 15 minutes pour remplir tous les niveaux")
-        safe_log(f"="*70)
-        
-        # 🚀 EXÉCUTION IMMÉDIATE DU NIVEAU 1 (50%)
-        success = self.execute_partial_entry_level(trade_id, 0)
-        
-        if not success:
-            safe_log(f"❌ Échec ouverture niveau 1 - Trade partiel annulé")
-            del self.partial_trades[trade_id]
-            return False
-        
-        # ⏰ MISE À JOUR DU TIMESTAMP POUR COOLDOWN (5 minutes entre trades)
-        if trade_type == 'BUY':
-            self.last_buy_timestamp = datetime.now()
-            safe_log(f"⏰ Cooldown BUY activé - Prochain trade possible dans 5 minutes")
-        
-        return True
-    
-    def execute_partial_entry_level(self, trade_id, level_index):
-        """Exécute une entrée spécifique d'un trade partiel"""
-        if trade_id not in self.partial_trades:
-            return False
-        
-        trade = self.partial_trades[trade_id]
-        level = trade['entry_levels'][level_index]
-        
-        if level['filled']:
-            safe_log(f"⚠️ Niveau {level['level']} déjà rempli")
-            return False
-        
-        # Calcul du lot pour ce niveau spécifique
-        total_risk_amount = self.get_risk_amount_for_trade(trade['signal'])
-        level_lot = self.calculate_lot_for_partial_entry(total_risk_amount, trade['sl_price'], level['price'], level['percentage'])
-        
-        # Placement de l'ordre au marché pour le niveau 1, limite pour les autres
-        if level_index == 0:
-            # Niveau 1 : Ordre au marché immédiat
-            success, ticket = self.place_partial_order_market(trade, level, level_lot)
-        else:
-            # Niveaux 2-3 : Ordres limites
-            success, ticket = self.place_partial_order_limit(trade, level, level_lot)
-        
-        if success:
-            level['filled'] = True
-            level['ticket'] = ticket
-            level['fill_time'] = datetime.now()
-            
-            # Mise à jour des stats du trade
-            self.update_partial_trade_stats(trade_id)
-            
-            safe_log(f"✅ Niveau {level['level']} rempli: {level_lot} lots à {level['price']:.2f}$ (Ticket #{ticket})")
-            
-        return success
-    
-    def calculate_lot_for_partial_entry(self, total_risk, sl_price, entry_price, percentage):
-        """Calcule le lot pour une entrée partielle"""
-        sl_distance = abs(entry_price - sl_price)
-        partial_risk = total_risk * percentage  # Ex: 60€ * 0.50 = 30€ pour niveau 1
-        lot = partial_risk / (sl_distance * 100)  # Pour XAUUSD
-        lot = round(lot, 2)
-        lot = max(lot, ADAPTIVE_LOT_MIN)
-        lot = min(lot, ADAPTIVE_LOT_MAX)
-        return lot
-    
-    def get_risk_amount_for_trade(self, signal):
-        """Calcule le montant total à risquer pour ce trade"""
-        account_info = mt5.account_info()
-        if not account_info:
-            return 60.0  # Fallback
-        
-        equity = account_info.equity
-        strength = signal.get('strength', 80)
-        
-        # Utilise la même logique que calculate_adaptive_lot_size
-        if strength >= 100:
-            risk_percent = 20
-        elif strength >= 95:
-            risk_percent = 15
-        elif strength >= 90:
-            risk_percent = 12
-        else:
-            risk_percent = 10
-        
-        return equity * (risk_percent / 100)
-    
-    def update_partial_trade_stats(self, trade_id):
-        """Met à jour les statistiques d'un trade partiel (prix moyen, etc.)"""
-        trade = self.partial_trades[trade_id]
-        
-        total_lots = 0.0
-        weighted_price_sum = 0.0
-        filled_count = 0
-        
-        for level in trade['entry_levels']:
-            if level['filled'] and level['ticket']:
-                # Récupération de l'info réelle depuis MT5
-                positions = mt5.positions_get(ticket=level['ticket'])
-                if positions:
-                    pos = positions[0]
-                    lot = pos.volume
-                    price = pos.price_open
-                    total_lots += lot
-                    weighted_price_sum += (price * lot)
-                    filled_count += 1
-        
-        if total_lots > 0:
-            trade['weighted_avg_price'] = weighted_price_sum / total_lots
-            trade['total_lot_size'] = total_lots
-            trade['filled_percentage'] = sum(l['percentage'] for l in trade['entry_levels'] if l['filled'])
-            
-            safe_log(f"📊 Trade #{trade_id} - Stats mises à jour:")
-            safe_log(f"   💰 Prix moyen pondéré: {trade['weighted_avg_price']:.2f}$")
-            safe_log(f"   📦 Lots total: {total_lots}")
-            safe_log(f"   ✅ Rempli: {trade['filled_percentage']*100:.0f}% ({filled_count}/{len(trade['entry_levels'])} niveaux)")
-    
-    def place_partial_order_market(self, trade, level, lot_size):
-        """Place un ordre au marché pour une entrée partielle"""
-        # Utilise la logique existante de place_real_order mais simplifié
-        tick_info = mt5.symbol_info_tick(self.symbol)
-        if not tick_info:
-            return False, None
-        
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": self.symbol,
-            "volume": lot_size,
-            "type": mt5.ORDER_TYPE_BUY,
-            "price": tick_info.ask,
-            "sl": trade['sl_price'],
-            "tp": trade['tp_price'],
-            "deviation": 20,
-            "magic": 123456,
-            "comment": f"PartialEntry_L{level['level']}",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
-        }
-        
-        result = mt5.order_send(request)
-        
-        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-            # 📝 AJOUT À self.open_positions pour breakeven/trailing
-            position_data = {
-                'ticket': result.order,
-                'type': 'BUY',
-                'open_price': tick_info.ask,
-                'open_time': datetime.now(),
-                'sl': trade['sl_price'],
-                'tp': trade['tp_price'],
-                'lot_size': lot_size,
-                'comment': f"PartialEntry_L{level['level']}"
-            }
-            self.open_positions.append(position_data)
-            self.buy_positions_count += 1
-            
-            safe_log(f"✅ Position ajoutée au tracking (breakeven/trailing activé)")
-            return True, result.order
-        else:
-            safe_log(f"❌ Échec ordre niveau {level['level']}: {result.comment if result else 'Aucune réponse'}")
-            return False, None
-    
-    def place_partial_order_limit(self, trade, level, lot_size):
-        """Place un ordre limite pour une entrée partielle (niveaux 2-3)"""
-        request = {
-            "action": mt5.TRADE_ACTION_PENDING,
-            "symbol": self.symbol,
-            "volume": lot_size,
-            "type": mt5.ORDER_TYPE_BUY_LIMIT,
-            "price": level['price'],
-            "sl": trade['sl_price'],
-            "tp": trade['tp_price'],
-            "deviation": 20,
-            "magic": 123456,
-            "comment": f"PartialEntry_L{level['level']}",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_RETURN,
-        }
-        
-        result = mt5.order_send(request)
-        
-        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-            safe_log(f"📋 Ordre limite placé niveau {level['level']}: {lot_size} lots à {level['price']:.2f}$")
-            return True, result.order
-        else:
-            safe_log(f"❌ Échec ordre limite niveau {level['level']}: {result.comment if result else 'Aucune réponse'}")
-            return False, None
-    
-    def monitor_partial_trades(self):
-        """Surveille les trades partiels en cours (timeouts, remplissage niveaux, etc.)"""
-        if not self.partial_trades:
-            return
-        
-        current_time = datetime.now()
-        
-        for trade_id in list(self.partial_trades.keys()):
-            trade = self.partial_trades[trade_id]
-            
-            # 🔍 VÉRIFIER SI LES ORDRES LIMITES ONT ÉTÉ REMPLIS
-            for level in trade['entry_levels']:
-                if not level['filled'] and level['ticket']:
-                    # Vérifier si l'ordre limite existe toujours (pas rempli)
-                    orders = mt5.orders_get(ticket=level['ticket'])
-                    
-                    if not orders:
-                        # L'ordre n'existe plus → Il a été rempli !
-                        # Chercher la position correspondante
-                        positions = mt5.positions_get(symbol=self.symbol)
-                        
-                        for pos in positions:
-                            # Trouver la position créée par cet ordre
-                            if pos.comment == f"PartialEntry_L{level['level']}":
-                                level['filled'] = True
-                                level['ticket'] = pos.ticket
-                                level['fill_time'] = datetime.now()
-                                
-                                # 📝 AJOUT À self.open_positions pour breakeven/trailing
-                                position_data = {
-                                    'ticket': pos.ticket,
-                                    'type': 'BUY',
-                                    'open_price': pos.price_open,
-                                    'open_time': datetime.now(),
-                                    'sl': pos.sl,
-                                    'tp': pos.tp,
-                                    'lot_size': pos.volume,
-                                    'comment': pos.comment
-                                }
-                                self.open_positions.append(position_data)
-                                self.buy_positions_count += 1
-                                
-                                safe_log(f"✅ Niveau {level['level']} rempli automatiquement!")
-                                safe_log(f"   Ticket: #{pos.ticket}, Prix: {pos.price_open:.2f}$")
-                                safe_log(f"   📝 Position ajoutée au tracking (breakeven/trailing activé)")
-                                
-                                # Mettre à jour les stats du trade
-                                self.update_partial_trade_stats(trade_id)
-                                break
-            
-            # Vérifier timeout
-            if current_time > trade['timeout'] and trade['status'] == 'PENDING':
-                safe_log(f"⏱️ Timeout atteint pour trade #{trade_id}")
-                self.finalize_partial_trade(trade_id)
-                continue
-            
-            # Vérifier si tous les niveaux sont remplis
-            all_filled = all(level['filled'] for level in trade['entry_levels'])
-            if all_filled and trade['status'] == 'PENDING':
-                safe_log(f"✅ Tous les niveaux remplis pour trade #{trade_id}")
-                trade['status'] = 'COMPLETED'
-                self.finalize_partial_trade(trade_id)
-    
-    def finalize_partial_trade(self, trade_id):
-        """Finalise un trade partiel (annule ordres restants, ajuste TP/SL)"""
-        trade = self.partial_trades[trade_id]
-        
-        # Annuler les ordres limites non remplis
-        for level in trade['entry_levels']:
-            if not level['filled'] and level['ticket']:
-                # Annuler l'ordre limite
-                cancel_request = {
-                    "action": mt5.TRADE_ACTION_REMOVE,
-                    "order": level['ticket']
-                }
-                mt5.order_send(cancel_request)
-                safe_log(f"🚫 Ordre limite niveau {level['level']} annulé (non rempli)")
-        
-        # Recalculer TP/SL basé sur le prix moyen pondéré
-        if trade['total_lot_size'] > 0:
-            self.adjust_tp_sl_for_partial_trade(trade_id)
-        
-        trade['status'] = 'FINALIZED'
-        safe_log(f"🏁 Trade #{trade_id} finalisé - {trade['filled_percentage']*100:.0f}% de la position ouverte")
-    
-    def adjust_tp_sl_for_partial_trade(self, trade_id):
-        """Ajuste TP/SL de toutes les positions du trade partiel selon le prix moyen"""
-        trade = self.partial_trades[trade_id]
-        
-        avg_price = trade['weighted_avg_price']
-        sl_distance = abs(avg_price - trade['sl_price'])
-        
-        # Recalculer TP depuis le prix moyen
-        tp_distance = self.calculate_market_aware_tp_ratio(
-            trade['signal'].get('strength', 80),
-            trade['atr'],
-            sl_distance
-        )
-        new_tp = avg_price + tp_distance
-        
-        safe_log(f"🔧 Ajustement TP/SL pour prix moyen {avg_price:.2f}$")
-        safe_log(f"   🎯 Nouveau TP: {new_tp:.2f}$ (calculé depuis prix moyen)")
-        
-        # Modifier toutes les positions du trade
-        for level in trade['entry_levels']:
-            if level['filled'] and level['ticket']:
-                request = {
-                    "action": mt5.TRADE_ACTION_SLTP,
-                    "symbol": self.symbol,
-                    "position": level['ticket'],
-                    "sl": trade['sl_price'],  # SL reste le même
-                    "tp": new_tp  # TP ajusté
-                }
-                result = mt5.order_send(request)
-                if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-                    safe_log(f"   ✅ TP/SL ajusté pour position #{level['ticket']}")
-    
     def execute_m5_trade(self, signal):
         """🎯 NOUVELLE EXÉCUTION M5 : TP/SL adaptatifs basés sur l'ATR avec validation ultra-stricte"""
         
@@ -3736,17 +3338,11 @@ class M5PullbackBot:
         safe_log(f"   📊 RSI: {signal['rsi']:.1f}")
         safe_log(f"   🎲 Confiance: {signal['confidence']:.2f}")
         
-        # � VÉRIFICATION MARGIN AVANT TRADE
+        # 💰 VÉRIFICATION MARGIN AVANT TRADE
         if not self.check_margin_availability():
             safe_log(f"🚫 Trade annulé - Margin insuffisante")
             return False
         
-        # 🔒 VÉRIFICATION LIMITE STRATÉGIES SIMULTANÉES
-        current_strategies = len([t for t in self.partial_trades.values() 
-                                  if t['status'] in ['PENDING', 'ACTIVE']])
-        if current_strategies >= MAX_POSITIONS:
-            safe_log(f"🚫 Trade annulé - Limite stratégies atteinte ({current_strategies}/{MAX_POSITIONS})")
-            return False
         # MISE A JOUR TIMESTAMP selon le type de trade
         if trade_type == 'BUY':
             self.last_buy_timestamp = datetime.now()
@@ -3901,14 +3497,12 @@ class M5PullbackBot:
                 else:
                     safe_log(f"   ⚠️ Confirmation H1: NEUTRAL | Direction incertaine")
             
-            # Condition 7 : Stratégies disponibles (trades logiques, pas positions MT5)
-            current_strategies = len([t for t in self.partial_trades.values() 
-                                      if t['status'] in ['PENDING', 'ACTIVE']])
+            # Condition 7 : Positions disponibles
             max_positions = self.calculate_adaptive_max_positions()
-            if current_strategies < max_positions:
-                safe_log(f"   ✅ Stratégies actives: {current_strategies}/{max_positions} | Capacité disponible")
+            if self.buy_positions_count < max_positions:
+                safe_log(f"   ✅ Positions actives: {self.buy_positions_count}/{max_positions} | Capacité disponible")
             else:
-                safe_log(f"   ❌ Stratégies actives: {current_strategies}/{max_positions} | Limite atteinte")
+                safe_log(f"   ❌ Positions actives: {self.buy_positions_count}/{max_positions} | Limite atteinte")
             
             # Résumé visuel
             conditions_ok = 0
@@ -3919,7 +3513,7 @@ class M5PullbackBot:
             if 1.5 <= current_atr <= 7.0: conditions_ok += 1
             if current_price > ema_master: conditions_ok += 1
             if not ENABLE_H1_CONFIRMATION or h1_trend == "BULLISH": conditions_ok += 1
-            if current_strategies < max_positions: conditions_ok += 1
+            if self.buy_positions_count < max_positions: conditions_ok += 1
             
             percentage_ready = (conditions_ok / conditions_total) * 100
             safe_log(f"   📊 Conditions remplies: {conditions_ok}/{conditions_total} ({percentage_ready:.0f}%)")
@@ -3952,12 +3546,12 @@ class M5PullbackBot:
                 reason = signal['reason']
                 safe_log(f"🔥 SIGNAL M5 {signal_type}: {reason} - Force:{strength:.1f}% Pullback:{pullback_quality:.0f}%")
                 
-                # 🎯 EXÉCUTION AVEC ENTRÉES PARTIELLES ÉCHELONNÉES
-                success = self.create_partial_entry_trade(signal)
+                # 🎯 EXÉCUTION DU TRADE
+                success = self.execute_m5_trade(signal)
                 if success:
-                    safe_log(f"✅ Trade M5 avec entrées échelonnées créé!")
+                    safe_log(f"✅ Trade M5 exécuté avec succès!")
                 else:
-                    safe_log(f"❌ Échec création trade M5")
+                    safe_log(f"❌ Échec exécution trade M5")
             else:
                 # 📝 RÉSUMÉ: Pourquoi aucun signal n'est généré
                 # ⚡ BEARISH: Pas de log détaillé (déjà fait dans should_open_position)
@@ -4124,9 +3718,6 @@ class M5PullbackBot:
                 
                 # 🎯 TP DYNAMIQUE - Ajustement en temps réel (priorité haute)
                 self.manage_dynamic_take_profit()
-                
-                # 🎯 SURVEILLANCE ENTRÉES PARTIELLES - Timeouts et remplissages
-                self.monitor_partial_trades()
                 
                 # 📊 ANALYSE DU MARCHÉ - Toutes les 10 secondes seulement
                 if last_market_analysis >= ANALYSIS_INTERVAL:
