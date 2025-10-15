@@ -83,7 +83,7 @@ TIMEFRAME = mt5.TIMEFRAME_M5    # 🕒 5 minutes (qualité > quantité)
 LOT_SIZE = "ADAPTIVE"           # 🚀 LOT ADAPTATIF AGRESSIF (3.5% risque par trade)
 USE_STOP_LOSS = True            # ✅ STOP LOSS OBLIGATOIRE EN ARGENT RÉEL
 MAX_POSITIONS = 3               # 🔒 Max 3 positions simultanées (optimisé pour éviter "No money")
-ANALYSIS_INTERVAL = 30          # 🕒 Analyse toutes les 30 secondes (haute fréquence)
+ANALYSIS_INTERVAL = 30         # 🕒 Analyse toutes les 1 minutes (2-3 fois par bougie M5 - qualité > réactivité)
 
 # 🚀 GESTION LOT ADAPTATIF OPTIMISÉ
 ADAPTIVE_LOT_RISK_PERCENT = 2.5 # Risque 2.5% par trade (optimisé vs 3.5% trop agressif)
@@ -107,7 +107,7 @@ RSI_BUY_MIN = 35               # RSI minimum pour BUY (momentum sain)
 RSI_BUY_MAX = 60               # RSI maximum pour BUY (pas de surachat excessif)
 
 # 🎯 PARAMÈTRES M5 PULLBACK (Qualité > Quantité)
-# COOLDOWN : 5 minutes entre les trades pour éviter le sur-trading
+# COOLDOWN : 10 minutes entre les trades pour éviter le sur-trading
 
 # 🛡️ FILTRES DE CONFIRMATION PROFESSIONNELS (NOUVEAU)
 ENABLE_H1_CONFIRMATION = True      # Confirmation tendance H1 obligatoire
@@ -2186,7 +2186,7 @@ class M5PullbackBot:
                 
                 # Calcul temps restant plus détaillé
                 current_time = datetime.now()
-                cooldown_duration = 300  # 5 minutes en secondes
+                cooldown_duration = 600  # 10 minutes en secondes
                 
                 if trend == "BULLISH":
                     if self.last_buy_timestamp:
@@ -3238,7 +3238,7 @@ class M5PullbackBot:
             current_rsi <= self.config['RSI_OVERBOUGHT']):  # RSI pas en surachat selon config
             
             # Cooldown M5 adaptatif avec logging amélioré
-            cooldown = 300  # 5 minutes entre les trades
+            cooldown = 600  # 10 minutes entre les trades
             
             if time_since_last_buy < cooldown:
                 remaining_time = cooldown - time_since_last_buy
@@ -3723,7 +3723,7 @@ class M5PullbackBot:
         else:
             safe_log(f"⚠️ Impossible de récupérer la balance")
             
-        safe_log(f"⚡ Analyse toutes les {ANALYSIS_INTERVAL} secondes (haute fréquence)")
+        safe_log(f"📊 Analyse toutes les {ANALYSIS_INTERVAL//60} minutes (signaux de qualité M5)")
         safe_log(f"🎯 TP/SL: Adaptatifs selon ATR")
         safe_log(f"🕐 Horaires: 7h30 à 21h30")
         safe_log(f"🛡️ Sécurités: Seuil -5%, Max 5 positions")
@@ -3734,18 +3734,19 @@ class M5PullbackBot:
     
     def run_ultra_scalping_unlimited(self):
         """Lance l'ultra scalping en mode illimité"""
-        safe_log(f"\n🔥 ULTRA SCALPING - MODE ILLIMITÉ")
+        safe_log(f"\n🔥 M5 PULLBACK - MODE STRATÉGIQUE")
         safe_log("="*60)
         safe_log(f"♾️ Session sans limite de temps")
-        safe_log(f"⚡ Analyse toutes les {ANALYSIS_INTERVAL} secondes (haute fréquence)")
+        safe_log(f"📊 Analyse toutes les {ANALYSIS_INTERVAL//60} minutes (2-3 fois par bougie M5)")
+        safe_log(f"🎯 Philosophie: Qualité > Quantité - Évite le bruit intra-bougie")
         safe_log(f"🎯 TP/SL: Adaptatifs selon ATR | Breakeven progressif")
         
         # 🎯 Affichage des nouvelles fonctionnalités avancées
         if ENABLE_DYNAMIC_TP:
             safe_log(f"\n🚀 FONCTIONNALITÉS EXPERT ACTIVÉES:")
-            safe_log(f"   🎯 TP Dynamique: Ajuste le TP en temps réel selon la force du marché")
-            safe_log(f"      📈 Accélération (>{DYNAMIC_TP_STRENGTH_THRESHOLD}%): Éloigne TP +{(DYNAMIC_TP_EXTENSION_MULTIPLIER-1)*100:.0f}%")
-            safe_log(f"      📉 Essoufflement (RSI<{DYNAMIC_TP_RSI_WEAKNESS}): SL agressif à 80% profit")
+            safe_log(f"   🎯 TP Dynamique: Extension automatique tous les 50% de progression")
+            safe_log(f"      📈 Extensions illimitées: +{(DYNAMIC_TP_EXTENSION_MULTIPLIER-1)*100:.0f}% à chaque palier")
+            safe_log(f"      � Trailing Stop: Sécurise le profit progressivement")
         
         safe_log(f"⏹️ Arrêt: Ctrl+C")
         safe_log("="*60)
