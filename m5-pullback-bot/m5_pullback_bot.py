@@ -99,7 +99,7 @@ RSI_PERIOD = 14                 # RSI standard (14 périodes)
 # 🎯 STRATÉGIE RÉVISÉE : TP PETITS + SL GRANDS + LOTS ÉLEVÉS
 ATR_PULLBACK_MULTIPLIER = 3.0   # Distance max à l'EMA 50 (3.0x ATR - zone pullback plus proche)
 ATR_SL_MULTIPLIER = 2.5         # � SL BUY : 2.5x ATR (standard)
-TP_MAX_POINTS = 200             # 🎯 TP maximum : 200 points (20 pips) - PLAFONNÉ
+TP_MAX_POINTS = 100             # 🎯 TP maximum : 100 points (10 pips) - PLAFONNÉ
 RISK_MULTIPLIER = 1.5           # 💰 Multiplicateur de risque augmenté (lots plus élevés)
 
 # 🎯 ZONES RSI POUR PULLBACK
@@ -510,7 +510,7 @@ class M5PullbackBot:
         
         NOUVELLE STRATÉGIE VOLATILITÉ :
         - Marché TRÈS VOLATIL (ATR > 6.0) : TP 400 points (40 pips)
-        - Marché NORMAL : TP 200 points (20 pips) 
+        - Marché NORMAL : TP 100 points (10 pips) 
         - SL plus grand (2.5x ATR) pour respiration
         - Lots adaptés selon volatilité
         
@@ -536,8 +536,8 @@ class M5PullbackBot:
                 safe_log(f"🔥 MARCHÉ TRÈS VOLATIL DÉTECTÉ - ATR {atr_value:.2f} > 6.0")
                 safe_log(f"🚀 TP ÉTENDU : 400 points (40 pips) pour profiter de la volatilité")
             else:
-                # 📊 MARCHÉ NORMAL : TP standard à 200 points
-                max_tp_distance = TP_MAX_POINTS * 0.01  # 200 points = 2.00 en price pour XAUUSD
+                # 📊 MARCHÉ NORMAL : TP standard à 100 points
+                max_tp_distance = TP_MAX_POINTS * 0.01  # 100 points = 1.00 en price pour XAUUSD
                 volatility_level = "NORMAL"
             
             # Base du ratio selon la force de tendance
@@ -3031,7 +3031,7 @@ class M5PullbackBot:
             lot_size = min(lot_size, ADAPTIVE_LOT_MAX)  # Maximum sécurité
             
             # Calcul du profit potentiel avec TP plafonné
-            tp_potential = TP_MAX_POINTS * 0.01 * 100 * lot_size  # 200 points max de profit
+            tp_potential = TP_MAX_POINTS * 0.01 * 100 * lot_size  # 100 points max de profit
             
             # 📊 LOG DÉTAILLÉ DU NOUVEAU SYSTÈME
             safe_log(f"🎯 LOT ADAPTATIF SELON FORCE TENDANCE:")
@@ -3040,12 +3040,12 @@ class M5PullbackBot:
             safe_log(f"   💰 Risque appliqué: {risk_percent:.1f}% de l'equity")
             safe_log(f"   💸 Montant risqué: {risk_amount:.2f}€")
             safe_log(f"   📈 Lot calculé: {lot_size}")
-            safe_log(f"   🎯 Profit potentiel max: {tp_potential:.2f}€ (TP 200pts)")
+            safe_log(f"   🎯 Profit potentiel max: {tp_potential:.2f}€ (TP 100pts)")
             safe_log(f"   ⚖️ Ratio Risk/Reward théorique: 1:{tp_potential/risk_amount:.2f}")
             
             return lot_size
             safe_log(f"� LOT AGRESSIF: Equity ${current_equity:.0f} → Lot {lot_size:.2f} (risque {enhanced_risk_percent:.1f}%)")
-            safe_log(f"   💰 Risque max: -${max_loss_per_trade:.0f} | Profit TP: +${tp_potential:.0f} (200pts max)")
+            safe_log(f"   💰 Risque max: -${max_loss_per_trade:.0f} | Profit TP: +${tp_potential:.0f} (100pts max)")
             safe_log(f"   🎯 Stratégie: TP petits + SL grands + Lots élevés")
             
             return lot_size
@@ -3354,7 +3354,7 @@ class M5PullbackBot:
         
         # 🔥 NOUVELLE STRATÉGIE : TP ADAPTATIFS basés sur le SL structurel
         
-        # 🎯 TP PLAFONNÉ À 200 POINTS MAXIMUM
+        # 🎯 TP PLAFONNÉ À 100 POINTS MAXIMUM
         tp_distance = self.calculate_market_aware_tp_ratio(trend_strength, atr_value, sl_distance)
         
         # Application selon le type d'ordre
@@ -3376,10 +3376,10 @@ class M5PullbackBot:
         # 🔥 LOG DÉTAILLÉ DE LA NOUVELLE STRATÉGIE
         safe_log(f"⚡ TRADE M5 {trade_type} - {signal['reason']}")
         safe_log(f"   📊 ATR actuel: {atr_value:.3f} (volatilité du marché)")
-        safe_log(f"   🎯 Tendance: {trend_strength:.1f}% → TP plafonné à 200pts")
+        safe_log(f"   🎯 Tendance: {trend_strength:.1f}% → TP plafonné à 100pts")
         safe_log(f"   💰 Prix entrée: ${entry_price:.2f}")
         safe_log(f"   🏗️ SL {sl_description}: ${sl_price:.2f} ({sl_pips:.1f} pips)")
-        safe_log(f"   🚀 TP PLAFONNÉ: ${tp_price:.2f} ({tp_points:.0f} pts ≤ 200pts max)")
+        safe_log(f"   🚀 TP PLAFONNÉ: ${tp_price:.2f} ({tp_points:.0f} pts ≤ 100pts max)")
         safe_log(f"   ⚖️ Ratio R/R: 1:{actual_ratio:.2f} (TP PLAFONNÉ + SL {sl_type})")
         safe_log(f"   💡 Le lot sera adapté automatiquement selon la distance SL")
         safe_log(f"   📈 Force signal: {signal['strength']:.1f}%")
