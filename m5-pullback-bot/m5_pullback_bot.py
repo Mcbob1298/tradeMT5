@@ -31,14 +31,42 @@ from datetime import datetime, timedelta
 import sys
 import io
 import time
-import time
-import io
-import sys
-import time
+import os
 
 # Configuration UTF-8 pour Windows
 import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+# =============================================================================
+# 📁 SYSTÈME DE LOGGING DANS FICHIER PAR JOUR
+# =============================================================================
+# Créer le dossier logs s'il n'existe pas
+LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+if not os.path.exists(LOGS_DIR):
+    os.makedirs(LOGS_DIR)
+
+# Fichier de log basé sur la date du jour
+LOG_FILE = None
+LOG_FILE_HANDLE = None
+
+def get_log_file():
+    """Obtient le nom du fichier de log pour aujourd'hui"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    return os.path.join(LOGS_DIR, f"m5_pullback_{today}.log")
+
+def open_log_file():
+    """Ouvre ou crée le fichier de log du jour"""
+    global LOG_FILE, LOG_FILE_HANDLE
+    new_log_file = get_log_file()
+    
+    # Si le fichier a changé (nouveau jour), fermer l'ancien et ouvrir le nouveau
+    if new_log_file != LOG_FILE:
+        if LOG_FILE_HANDLE:
+            LOG_FILE_HANDLE.close()
+        LOG_FILE = new_log_file
+        LOG_FILE_HANDLE = open(LOG_FILE, 'a', encoding='utf-8')
+    
+    return LOG_FILE_HANDLE
 
 # =============================================================================
 # ⚠️ ⚠️ ⚠️ AVERTISSEMENT ARGENT RÉEL ⚠️ ⚠️ ⚠️
@@ -83,7 +111,7 @@ TIMEFRAME = mt5.TIMEFRAME_M5    # 🕒 5 minutes (qualité > quantité)
 LOT_SIZE = "ADAPTIVE"           # 🚀 LOT ADAPTATIF AGRESSIF (3.5% risque par trade)
 USE_STOP_LOSS = True            # ✅ STOP LOSS OBLIGATOIRE EN ARGENT RÉEL
 MAX_POSITIONS = 3               # 🔒 Max 3 positions simultanées (optimisé pour éviter "No money")
-ANALYSIS_INTERVAL = 30         # 🕒 Analyse toutes les 1 minutes (2-3 fois par bougie M5 - qualité > réactivité)
+ANALYSIS_INTERVAL = 60         # 🕒 Analyse toutes les 1 minutes (2-3 fois par bougie M5 - qualité > réactivité)
 
 # 🚀 GESTION LOT ADAPTATIF OPTIMISÉ
 ADAPTIVE_LOT_RISK_PERCENT = 2.5 # Risque 2.5% par trade (optimisé vs 3.5% trop agressif)
@@ -99,7 +127,7 @@ RSI_PERIOD = 14                 # RSI standard (14 périodes)
 # 🎯 STRATÉGIE RÉVISÉE : TP PETITS + SL GRANDS + LOTS ÉLEVÉS
 ATR_PULLBACK_MULTIPLIER = 3.0   # Distance max à l'EMA 50 (3.0x ATR - zone pullback plus proche)
 ATR_SL_MULTIPLIER = 2.5         # � SL BUY : 2.5x ATR (standard)
-TP_MAX_POINTS = 100             # 🎯 TP maximum : 100 points (10 pips) - PLAFONNÉ
+TP_MAX_POINTS = 250             # 🎯 TP maximum : 250 points (25 pips) - PLAFONNÉ (Potentiel augmenté)
 RISK_MULTIPLIER = 1.5           # 💰 Multiplicateur de risque augmenté (lots plus élevés)
 
 # 🎯 ZONES RSI POUR PULLBACK
@@ -112,7 +140,7 @@ RSI_BUY_MAX = 60               # RSI maximum pour BUY (pas de surachat excessif)
 # 🛡️ FILTRES DE CONFIRMATION PROFESSIONNELS (NOUVEAU)
 ENABLE_H1_CONFIRMATION = True      # Confirmation tendance H1 obligatoire
 OPTIMAL_ATR_MIN = 1.5              # Volatilité minimale pour trader (1.5 = 15 pips)
-OPTIMAL_ATR_MAX = 7.0              # Volatilité maximale (marché trop chaotique)
+OPTIMAL_ATR_MAX = 5.5              # ⚠️ Volatilité maximale (au-delà = CHAOS, pas de trading)
 
 # 🛡️ GESTION DU MODE DÉGRADÉ (NOUVEAU)
 DEGRADED_MODE_RISK_MULTIPLIER = 0.2  # Risque = 20% du risque normal (2.5% -> 0.5%)
@@ -131,13 +159,39 @@ CONFIRMATION_DELAY_SECONDS = 180      # 3 minutes d'attente pour confirmation
 SIGNAL_PERSISTENCE_CHECKS = 3         # Signal doit persister 3 vérifications
 
 # =============================================================================
+# CONFIGURATION STRATÉGIE #2 : V-SHAPE REVERSAL (Achat sur Mèche)
+# =============================================================================
+ENABLE_VSHAPE_STRATEGY = True      # ✅ Active la stratégie secondaire d'achat sur les mèches basses
+VSHAPE_RSI_OVERSOLD = 25           # Seuil RSI de survente extrême pour déclencher
+VSHAPE_DROP_CANDLES = 4            # Nombre de bougies pour mesurer la chute
+VSHAPE_DROP_ATR_MULTIPLIER = 2.0   # La chute doit être d'au moins 2.0x l'ATR
+
+# =============================================================================
+# 🛡️ SÉCURITÉ #2 : OBJECTIF DE PROFIT QUOTIDIEN (NOUVEAU)
+# =============================================================================
+ENABLE_DAILY_PROFIT_TARGET = True      # ✅ Active la pause lorsque l'objectif est atteint
+DAILY_PROFIT_TARGET_PERCENT = 10.0     # 🎯 Objectif: +10% de l'equity du début de journée
+
+# =============================================================================
 
 def safe_log(message):
-    """Log avec timestamp pour ultra scalping"""
+    """Log avec timestamp pour ultra scalping - Affiche ET sauvegarde dans fichier"""
     try:
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]  # Millisecondes
-        print(f"[{timestamp}] {message}", flush=True)
+        log_message = f"[{timestamp}] {message}"
+        
+        # Affichage console
+        print(log_message, flush=True)
         sys.stdout.flush()
+        
+        # 📁 Sauvegarde dans fichier de log quotidien
+        try:
+            log_handle = open_log_file()
+            log_handle.write(log_message + '\n')
+            log_handle.flush()
+        except Exception as file_error:
+            print(f"[LOG FILE ERROR] {file_error}", flush=True)
+            
     except Exception as e:
         print(f"[LOG ERROR] {e}", flush=True)
 
@@ -217,6 +271,11 @@ class M5PullbackBot:
         
         # Variables système profit quotidien adaptatif
         self.daily_start_balance = 0  # Balance de départ du jour
+        self.daily_start_equity = 0   # 🎯 NOUVEAU: Equity de départ du jour (pour objectif profit)
+        
+        # 🎯 SÉCURITÉ PROFIT QUOTIDIEN
+        self.daily_profit_target_reached = False  # Verrou quand objectif atteint
+        self.daily_profit_locked = False  # 🔒 NOUVEAU: Verrouillage trading quand objectif atteint
         
         # 🛡️ SYSTÈME DE CONFIRMATION SUR 3 CYCLES (Anti-faux signaux)
         self.trend_confirmation_history = []  # Historique des 3 dernières tendances
@@ -509,8 +568,8 @@ class M5PullbackBot:
         ===================================================
         
         NOUVELLE STRATÉGIE VOLATILITÉ :
-        - Marché TRÈS VOLATIL (ATR > 6.0) : TP 400 points (40 pips)
-        - Marché NORMAL : TP 100 points (10 pips) 
+        - Marché TRÈS VOLATIL (ATR > 6.0) : TP 150 points (15 pips) - 50% bonus
+        - Marché NORMAL : TP 250 points (25 pips) 
         - SL plus grand (2.5x ATR) pour respiration
         - Lots adaptés selon volatilité
         
@@ -530,14 +589,14 @@ class M5PullbackBot:
         try:
             # 🔥 DÉTECTION VOLATILITÉ EXTRÊME : ATR > 6.0 = Marché très volatil
             if atr_value > 6.0:
-                # 🚀 MARCHÉ TRÈS VOLATIL : TP étendu à 400 points
-                max_tp_distance = 400 * 0.01  # 400 points = 4.00 en price pour XAUUSD
+                # 🚀 MARCHÉ TRÈS VOLATIL : TP étendu de 50% (150 points)
+                max_tp_distance = TP_MAX_POINTS * 1.5 * 0.01  # 150 points = 1.50 en price pour XAUUSD
                 volatility_level = "TRÈS VOLATIL"
                 safe_log(f"🔥 MARCHÉ TRÈS VOLATIL DÉTECTÉ - ATR {atr_value:.2f} > 6.0")
-                safe_log(f"🚀 TP ÉTENDU : 400 points (40 pips) pour profiter de la volatilité")
+                safe_log(f"🚀 TP ÉTENDU : 150 points (15 pips) - Bonus volatilité +50%")
             else:
-                # 📊 MARCHÉ NORMAL : TP standard à 100 points
-                max_tp_distance = TP_MAX_POINTS * 0.01  # 100 points = 1.00 en price pour XAUUSD
+                # 📊 MARCHÉ NORMAL : TP standard à 250 points
+                max_tp_distance = TP_MAX_POINTS * 0.01  # 250 points = 2.50 en price pour XAUUSD
                 volatility_level = "NORMAL"
             
             # Base du ratio selon la force de tendance
@@ -754,38 +813,99 @@ class M5PullbackBot:
                 safe_log("⚠️ Impossible d'initialiser le système de profit quotidien")
                 return
             
+            # --- MODIFICATION : Utilisation de l'EQUITY pour plus de précision ---
+            current_equity = account_info.equity
             current_balance = account_info.balance
             today = datetime.now().date()
             
-            # 🚨 ARGENT RÉEL: Balance de départ du jour pour calcul profit quotidien
-            self.daily_start_balance = current_balance
+            # 🚨 ARGENT RÉEL: Balance et Equity de départ du jour
+            self.daily_start_balance = current_balance  # On garde pour la compatibilité
+            self.daily_start_equity = current_equity    # NOUVEAU: Equity de départ du jour
             
             # Reset des stats quotidiennes  
             self.stats['daily_start'] = today
             self.stats['daily_profit'] = 0  # Remis à zéro
+            self.daily_profit_target_reached = False  # Reset du verrou
+            
+            # Calcul de l'objectif en euros
+            target_amount = self.daily_start_equity * (DAILY_PROFIT_TARGET_PERCENT / 100)
             
             safe_log(f"🌅 SYSTÈME PROFIT QUOTIDIEN ARGENT RÉEL INITIALISÉ:")
             safe_log(f"   📅 Date: {today.strftime('%d/%m/%Y')}")
-            safe_log(f"   💰 Balance de départ du jour: {self.daily_start_balance:.2f}€")
-            safe_log(f"   📊 Profit quotidien sera: Balance actuelle - {self.daily_start_balance:.2f}€")
+            safe_log(f"   💰 Equity de départ du jour: {self.daily_start_equity:.2f}€")
+            safe_log(f"   � Balance de départ: {self.daily_start_balance:.2f}€")
+            safe_log(f"   🎯 Objectif de profit (+{DAILY_PROFIT_TARGET_PERCENT}%): +{target_amount:.2f}€")
             safe_log(f"   🛡️ Filet de sécurité: Balance (-5%)")
-            safe_log(f"   🚨 ARGENT RÉEL: Calculs basés sur balance réelle uniquement")
+            safe_log(f"   🚨 ARGENT RÉEL: Calculs basés sur equity/balance réels")
             
         except Exception as e:
             safe_log(f"❌ Erreur initialisation système profit quotidien: {e}")
     
+    def check_daily_profit_target(self):
+        """
+        🛡️ NOUVELLE SÉCURITÉ: Vérifie si l'objectif de profit quotidien est atteint.
+        - Si profit >= 10%, arrête de prendre de nouveaux trades.
+        - Si profit retombe < 10%, réactive le trading.
+        Returns:
+            bool: True si le trading doit être mis en pause, False sinon.
+        """
+        if not ENABLE_DAILY_PROFIT_TARGET or self.daily_start_equity == 0:
+            return False
+
+        # Calcul de l'objectif en euros et du profit actuel
+        target_profit_amount = self.daily_start_equity * (DAILY_PROFIT_TARGET_PERCENT / 100)
+        current_daily_profit = self.calculate_real_time_daily_profit()
+        
+        # --- LOGIQUE DE VERROUILLAGE ---
+        if current_daily_profit >= target_profit_amount:
+            # Si on vient juste d'atteindre l'objectif
+            if not self.daily_profit_target_reached:
+                safe_log(f"\n{'='*70}")
+                safe_log(f"🏆 OBJECTIF DE PROFIT QUOTIDIEN ATTEINT !")
+                safe_log(f"   💰 Profit actuel: +{current_daily_profit:.2f}€ (≥ {target_profit_amount:.2f}€)")
+                safe_log(f"   🎯 Objectif: +{DAILY_PROFIT_TARGET_PERCENT}% de l'equity de départ ({self.daily_start_equity:.2f}€)")
+                safe_log(f"   🔒 VERROUILLAGE : Le bot n'ouvrira plus de NOUVEAUX trades aujourd'hui.")
+                safe_log(f"   ✅ Les trades en cours continuent d'être gérés normalement (SL/TP/Trailing).")
+                safe_log(f"   🔄 Le trading reprendra si le profit retombe sous l'objectif.")
+                safe_log(f"{'='*70}\n")
+                self.daily_profit_target_reached = True
+            
+            # Affiche un message de rappel périodique
+            if hasattr(self, '_profit_lock_count'):
+                self._profit_lock_count += 1
+            else:
+                self._profit_lock_count = 1
+                
+            if self._profit_lock_count % 30 == 0:  # Toutes les 30 analyses
+                safe_log(f"🔒 PROFIT VERROUILLÉ (+{current_daily_profit:.2f}€). Pas de nouveaux trades.")
+
+            return True  # Indique au cycle principal de s'arrêter
+
+        # --- LOGIQUE DE DÉVERROUILLAGE ---
+        else:
+            # Si l'objectif était atteint mais qu'on est repassé en dessous
+            if self.daily_profit_target_reached:
+                safe_log(f"\n{'='*70}")
+                safe_log(f"🔄 REPRISE DU TRADING !")
+                safe_log(f"   💰 Le profit quotidien est retombé à +{current_daily_profit:.2f}€ (sous l'objectif de {target_profit_amount:.2f}€).")
+                safe_log(f"   ✅ Le bot recherche de nouveau des opportunités pour atteindre l'objectif.")
+                safe_log(f"{'='*70}\n")
+                self.daily_profit_target_reached = False
+            
+            return False  # Indique au cycle principal de continuer
+    
     def calculate_real_time_daily_profit(self):
-        """Calcule le profit quotidien en temps réel basé sur la balance RÉELLE"""
+        """Calcule le profit quotidien en temps réel basé sur l'EQUITY RÉELLE"""
         try:
             account_info = mt5.account_info()
             if not account_info:
                 return 0
             
-            # 🚨 ARGENT RÉEL: Balance réelle uniquement
-            current_balance = account_info.balance
+            # 🚨 ARGENT RÉEL: Equity réelle (capitaux propres = balance + P/L positions ouvertes)
+            current_equity = account_info.equity
             
-            # Calcul simple: Balance actuelle - Balance de début de journée
-            daily_profit = current_balance - self.daily_start_balance
+            # Calcul simple: Equity actuelle - Equity de début de journée
+            daily_profit = current_equity - self.daily_start_equity
             
             # Debug: Log périodique du calcul (toutes les 50 vérifications)
             if not hasattr(self, '_profit_debug_count'):
@@ -794,8 +914,8 @@ class M5PullbackBot:
             
             if self._profit_debug_count % 50 == 0:  # Toutes les 50 vérifications
                 safe_log(f"💰 DEBUG PROFIT:")
-                safe_log(f"   📊 Balance actuelle: {current_balance:.2f}€")
-                safe_log(f"   📊 Balance début journée: {self.daily_start_balance:.2f}€")
+                safe_log(f"   📊 Equity actuelle: {current_equity:.2f}€")
+                safe_log(f"   📊 Equity début journée: {self.daily_start_equity:.2f}€")
                 safe_log(f"   📊 Profit calculé: {daily_profit:+.2f}€")
             
             return daily_profit
@@ -844,7 +964,8 @@ class M5PullbackBot:
             # Calcul de la distance SL basée sur l'ATR pour le lot adaptatif
             atr_sl_distance = signal.get('atr', 2.5) * ATR_SL_MULTIPLIER  # Fallback ATR 2.5 pour XAUUSD
             trend_strength = signal.get('strength', 50)  # Force de la tendance
-            volume = self.calculate_adaptive_lot_size(atr_sl_distance, trend_strength, trade_type)
+            strategy = signal.get('reason', 'PULLBACK')  # Type de stratégie (PULLBACK ou VSHAPE_REVERSAL)
+            volume = self.calculate_adaptive_lot_size(atr_sl_distance, trend_strength, trade_type, strategy)
             
             # Vérification du symbole
             symbol_info = mt5.symbol_info(self.symbol)
@@ -980,68 +1101,22 @@ class M5PullbackBot:
     
     def intelligent_position_management(self):
         """
-        🧠 GESTION INTELLIGENTE DES POSITIONS
-        ===================================
+        🧠 GESTION INTELLIGENTE DES POSITIONS - DÉSACTIVÉE
+        ==================================================
         
-        Logique avancée:
-        1. Si position en profit ET tendance s'inverse → Fermeture intelligente
-        2. Si position dans le sens de la tendance → Laisser courir
-        3. Vérification margin libre avant nouveaux trades
+        ❌ FONCTION DÉSACTIVÉE: Le système de breakeven gère déjà
+        la sécurisation des profits de manière optimale.
+        
+        La fermeture anticipée des positions profitables était contre-productive,
+        notamment pour les stratégies V-SHAPE qui tradent les retournements.
+        
+        Le breakeven progressif assure:
+        - Sécurisation automatique dès que le profit est suffisant
+        - Laisse courir les positions gagnantes
+        - Meilleur ratio Risk/Reward
         """
-        if not self.open_positions:
-            return
-        
-        # Récupération des positions MT5 actuelles
-        mt5_positions = mt5.positions_get(symbol=self.symbol)
-        if not mt5_positions:
-            return
-        
-        # Analyse de la tendance actuelle
-        try:
-            rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, 250)
-            if rates is None or len(rates) < 50:
-                return
-            
-            data = [{'open': rate['open'], 'high': rate['high'], 
-                    'low': rate['low'], 'close': rate['close']} for rate in rates]
-            
-            trend_direction, strength, signal = self.detect_ultra_trend(data)
-            current_price = signal['price']
-            
-        except Exception as e:
-            safe_log(f"❌ Erreur analyse tendance pour gestion intelligente: {e}")
-            return
-        
-        # Analyse de chaque position
-        for mt5_pos in mt5_positions:
-            try:
-                profit = mt5_pos.profit
-                position_type = "BUY"
-                ticket = mt5_pos.ticket
-                
-                # ✅ Condition 1: Position en profit ET tendance inversée
-                if profit > 0:  # Au moins 0€ de profit
-                    should_close = False
-                    close_reason = ""
-                    
-                    if position_type == "BUY" and trend_direction == "BEARISH":
-                        should_close = True
-                        close_reason = "BUY profitable + tendance BEARISH"
-                    
-                    if should_close:
-                        safe_log(f"🧠 GESTION INTELLIGENTE: {close_reason}")
-                        safe_log(f"   💰 Profit actuel: +{profit:.2f}€")
-                        safe_log(f"   🔄 Fermeture anticipée pour sécuriser gain")
-                        
-                        success = self.close_position_by_ticket(ticket)
-                        if success:
-                            self.update_daily_profit(profit)
-                            safe_log(f"✅ Position fermée intelligemment: +{profit:.2f}€")
-                        else:
-                            safe_log(f"❌ Échec fermeture intelligente position {ticket}")
-                
-            except Exception as e:
-                safe_log(f"❌ Erreur analyse position {mt5_pos.ticket}: {e}")
+        # Fonction désactivée - le breakeven prend le relais
+        return
     
     def check_margin_availability(self):
         """
@@ -1274,19 +1349,18 @@ class M5PullbackBot:
         🚀 SYSTÈME AVANCÉ DE GESTION DES PROFITS
         =========================================
         
-        🛡️ PROTECTION PROGRESSIVE (TRAILING STOP) :
-        - 30% du TP → SL à 20% du profit
-        - 50% du TP → SL à 35% du profit
-        - 75% du TP → SL à 50% du profit
-        - 90% du TP → SL à 75% du profit + 🚀 TP étendu de +50%
+        🛡️ PROTECTION PROGRESSIVE (TRAILING STOP) - Équilibré-Ambitieux :
+        - 40% du TP → SL à 30% du profit (laisse respirer le trade)
+        - 60% du TP → SL à 45% du profit  
+        - 80% du TP → SL à 65% du profit + 🚀 TP étendu de +50%
         
         💎 EXTENSION DU TP (EXTENSIONS MULTIPLES) :
-        Quand le trailing stop atteint 75% du profit (phase QUASI-TP),
+        Quand la progression atteint 40% du TP,
         le Take Profit est automatiquement étendu de 50% supplémentaire.
         
         🔥 PAS DE LIMITE : Le système peut étendre le TP autant de fois
-        que nécessaire tant que le prix continue à progresser à 90% du TP.
-        Le SL suit toujours à 75% du profit actuel = Protection garantie !
+        que nécessaire tant que le prix continue à progresser vers 80% du TP.
+        Le SL suit toujours à 65% du profit actuel = Protection garantie !
         
         ⚡ RÈGLE D'OR : Le SL ne recule JAMAIS, seulement progression !
         """
@@ -1347,26 +1421,22 @@ class M5PullbackBot:
                 else:
                     tp_progress_pct = 0
                 
-                # 🚀 TRAILING STOP PROGRESSIF
-                if tp_progress_pct >= 30.0:
+                # 🚀 TRAILING STOP PROGRESSIF - Activation à 40% pour laisser respirer
+                if tp_progress_pct >= 40.0:  # Activation dès 40% (au lieu de 20%)
                     
                     # 📈 CALCUL DU NIVEAU DE SL PROGRESSIF - TOUJOURS POSITIF
-                    if tp_progress_pct >= 90.0:
-                        # Quasi TP atteint → 75% du profit sécurisé
-                        sl_profit_ratio = 0.75
-                        phase = "QUASI-TP (75% profit)"
-                    elif tp_progress_pct >= 75.0:
-                        # Bon momentum → 50% du profit sécurisé
-                        sl_profit_ratio = 0.50
-                        phase = "MOMENTUM (50% profit)"
-                    elif tp_progress_pct >= 35.0:
-                        # Progression solide → 35% du profit sécurisé
-                        sl_profit_ratio = 0.35
-                        phase = "PROGRESSION (35% profit)"
-                    else:
-                        # Premier niveau (30-50%) → 20% du profit sécurisé (simple)
-                        sl_profit_ratio = 0.20
-                        phase = "SÉCURISÉ (20% profit)"
+                    if tp_progress_pct >= 80.0:
+                        # Quasi TP atteint → 65% du profit sécurisé
+                        sl_profit_ratio = 0.65
+                        phase = "QUASI-TP (65% profit)"
+                    elif tp_progress_pct >= 60.0:
+                        # Bon momentum → 45% du profit sécurisé
+                        sl_profit_ratio = 0.45
+                        phase = "MOMENTUM (45% profit)"
+                    else:  # Concerne la plage 40-60%
+                        # Progression solide → 30% du profit sécurisé
+                        sl_profit_ratio = 0.30
+                        phase = "PROGRESSION (30% profit)"
 
                     # Calcul du nouveau SL selon la phase
                     target_profit_distance = tp_distance * sl_profit_ratio
@@ -1438,7 +1508,7 @@ class M5PullbackBot:
                     
                     # ✅ LOGGING DE DÉBOGAGE RENFORCÉ
                     safe_log(f"🚀 TRAILING STOP - Ticket {ticket} - Phase: {phase}")
-                    safe_log(f"   📊 Progression TP: {tp_progress_pct:.1f}% (seuil: 30%)")
+                    safe_log(f"   📊 Progression TP: {tp_progress_pct:.1f}% (seuil: 40% - laisse respirer)")
                     safe_log(f"   💰 Profit actuel: +{current_profit_distance:.3f} | TP cible: {tp_distance:.3f}")
                     safe_log(f"   🔄 SL: {current_sl:.5f} → {new_sl_progressive:.5f}")
                     
@@ -1448,11 +1518,11 @@ class M5PullbackBot:
                     safe_log(f"   🎯 SL progressif: {new_sl_progressive:.5f} ({sl_profit_ratio*100:.0f}% du profit)")
                     safe_log(f"   💰 Profit garanti: +{guaranteed_profit_pips:.1f} pips")
                     
-                    # 🚀 EXTENSION DU TP BASÉE SUR LA PROGRESSION (Système Simplifié)
+                    # 🚀 EXTENSION DU TP BASÉE SUR LA PROGRESSION (Seuils adaptés pour TP 100pts)
                     new_tp = mt5_position.tp  # Par défaut, garde le même TP
                     tp_extended = False
                     
-                    if tp_progress_pct >= 50.0:
+                    if tp_progress_pct >= 40.0:  # Extension dès 40% (40 points sur 100)
                         # 🔥 TRACKING POUR EXTENSIONS MULTIPLES ILLIMITÉES
                         if not hasattr(self, '_tp_extension_tracking'):
                             self._tp_extension_tracking = {}  # {ticket: {'last_tp': value, 'count': number, 'last_progress': pct}}
@@ -1468,18 +1538,18 @@ class M5PullbackBot:
                         tracking = self._tp_extension_tracking[ticket]
                         current_tp = mt5_position.tp
                         
-                        # ✅ LOGIQUE SIMPLE : Extension dès que 50% atteint, puis tous les 50% suivants
+                        # ✅ LOGIQUE SIMPLE : Extension dès que 40% atteint, puis tous les 40% suivants
                         should_extend = False
                         
                         if tracking['count'] == 0:
-                            # Première extension : dès que 50% est atteint
+                            # Première extension : dès que 40% est atteint (40 points sur 100)
                             should_extend = True
-                            extension_reason = "Premier seuil 50% atteint"
+                            extension_reason = "Premier seuil 40% atteint (40pts)"
                         else:
-                            # Extensions suivantes : tous les 50% de progression vers le nouveau TP
-                            if tp_progress_pct >= 50.0:
+                            # Extensions suivantes : tous les 40% de progression vers le nouveau TP
+                            if tp_progress_pct >= 40.0:
                                 should_extend = True
-                                extension_reason = f"Progression {tp_progress_pct:.1f}% >= 50%"
+                                extension_reason = f"Progression {tp_progress_pct:.1f}% >= 40%"
                         
                         if should_extend:
                             # Calcul du nouveau TP étendu de 50%
@@ -2527,8 +2597,6 @@ class M5PullbackBot:
         except Exception as e:
             safe_log(f"❌ Erreur fermeture fin de journée: {e}")
             return 0
-
-    def close_all_positions_friday_end(self):
         """🔴 Ferme TOUTES les positions (profitables ET perdantes) le vendredi à 22h30"""
         try:
             # Récupération des positions ouvertes
@@ -2971,21 +3039,24 @@ class M5PullbackBot:
         
         return ema
     
-    def calculate_adaptive_lot_size(self, atr_sl_distance, trend_strength=50, trade_type="BUY"):
+    def calculate_adaptive_lot_size(self, atr_sl_distance, trend_strength=50, trade_type="BUY", strategy="PULLBACK"):
         """
         🚀 CALCUL LOT ADAPTATIF SELON FORCE DE TENDANCE ET TYPE DE TRADE
         ================================================================
         
-        STRATÉGIE BUY (adaptatif selon force) :
-        - Force 80-89% : Risque standard 2.5%
-        - Force 90-94% : Risque augmenté 3.5% 
+        STRATÉGIE PULLBACK (adaptatif selon force) :
+        - Force 80-89% : Risque standard 3.0%
+        - Force 90-94% : Risque augmenté 4.5% 
         - Force 95-99% : Risque élevé 6%
-        - Force 100% : Risque maximum 12% (certitude absolue)
+        
+        STRATÉGIE V-SHAPE REVERSAL :
+        - Risque fixe : 5.0% de l'equity (plus agressif car signal fort)
         
         Args:
             atr_sl_distance: Distance du Stop Loss basée sur l'ATR
             trend_strength: Force de la tendance (0-100%)
             trade_type: "BUY"
+            strategy: "PULLBACK" ou "VSHAPE_REVERSAL"
             
         Returns:
             float: Taille de lot optimale (adaptée à la certitude et au type)
@@ -2999,18 +3070,22 @@ class M5PullbackBot:
             
             current_equity = account_info.equity
             
-            # 🎯 CALCUL DU RISQUE SELON LA FORCE DE TENDANCE
-            # 🟢 Risque de BASE : 10% de l'equity
-            # 🚀 Progression selon la force du signal
-            if trend_strength >= 95.0:
-                risk_percent = 10  # 🎯 Risque élevé - Très forte certitude (1.5x le risque de base)
-                risk_level = "ÉLEVÉ"
-            elif trend_strength >= 90.0:
-                risk_percent = 5  # ⚡ Risque augmenté - Forte certitude (1.2x le risque de base)
-                risk_level = "AUGMENTÉ"
+            # 🎯 LOGIQUE DE RISQUE DIFFÉRENCIÉE PAR STRATÉGIE
+            if strategy == "VSHAPE_REVERSAL":
+                # V-SHAPE = Risque fixe de 5% (signal de retournement fort)
+                risk_percent = 5.0
+                risk_level = "V-SHAPE (5%)"
             else:
-                risk_percent = 2.5  # 📊 Risque STANDARD - 2.5% de l'equity
-                risk_level = "STANDARD"
+                # PULLBACK = Risque adaptatif selon force
+                if trend_strength >= 95.0:
+                    risk_percent = 6.0  # 🎯 Risque ÉLEVÉ mais contrôlé
+                    risk_level = "ÉLEVÉ (Contrôlé)"
+                elif trend_strength >= 90.0:
+                    risk_percent = 4.5  # ⚡ Risque AUGMENTÉ
+                    risk_level = "AUGMENTÉ"
+                else:
+                    risk_percent = 3.0  # 📊 Risque STANDARD
+                    risk_level = "STANDARD"
             
             # 🛡️ APPLICATION DU MODE DÉGRADÉ
             if self.stats.get('balance_safety_active', False):
@@ -3031,7 +3106,7 @@ class M5PullbackBot:
             lot_size = min(lot_size, ADAPTIVE_LOT_MAX)  # Maximum sécurité
             
             # Calcul du profit potentiel avec TP plafonné
-            tp_potential = TP_MAX_POINTS * 0.01 * 100 * lot_size  # 100 points max de profit
+            tp_potential = TP_MAX_POINTS * 0.01 * 100 * lot_size  # 250 points max de profit
             
             # 📊 LOG DÉTAILLÉ DU NOUVEAU SYSTÈME
             safe_log(f"🎯 LOT ADAPTATIF SELON FORCE TENDANCE:")
@@ -3312,6 +3387,137 @@ class M5PullbackBot:
         # Aucune condition remplie
         return None
     
+    def detect_v_shape_reversal_signal(self, data, indicators):
+        """
+        🎯 STRATÉGIE #2: Détecte les opportunités de retournement en V (Achat sur Mèche).
+        Cette stratégie est indépendante du pullback et cherche des chutes rapides et excessives.
+        
+        Conditions:
+        1. RSI en survente extrême (< 25)
+        2. Chute rapide et violente (> 2.0x ATR sur 4 bougies)
+        3. Bougie de retournement haussière (confirmation)
+        
+        Returns:
+            dict: Signal de trade ou None si pas de signal
+        """
+        if not ENABLE_VSHAPE_STRATEGY:
+            return None
+
+        # On a besoin d'assez de données pour l'analyse
+        if len(data) < VSHAPE_DROP_CANDLES + 1:
+            return None
+
+        current_price = indicators['price']
+        current_rsi = indicators['rsi']
+        current_atr = indicators['atr']
+
+        # --- CONDITION 1: Survente Extrême ---
+        is_oversold = current_rsi < VSHAPE_RSI_OVERSOLD
+        
+        # --- CONDITION 2: Chute Rapide et Significative ---
+        # On regarde le prix le plus haut des X dernières bougies avant la dernière
+        start_price_of_drop = max(d['high'] for d in data[-VSHAPE_DROP_CANDLES-1:-1])
+        lowest_price_of_drop = min(d['low'] for d in data[-VSHAPE_DROP_CANDLES-1:])
+
+        drop_size = start_price_of_drop - lowest_price_of_drop
+        required_drop_size = VSHAPE_DROP_ATR_MULTIPLIER * current_atr
+
+        is_significant_drop = drop_size > required_drop_size
+        
+        # --- CONDITION 3: Signe de Reversal ---
+        # La dernière bougie doit être haussière pour confirmer le début du rebond
+        last_candle = data[-1]
+        is_reversal_candle = last_candle['close'] > last_candle['open']
+        candle_color = "🟢 VERTE" if is_reversal_candle else "🔴 ROUGE"
+        
+        # 📊 DIAGNOSTIC DÉTAILLÉ V-SHAPE (Affiché systématiquement si au moins une condition proche)
+        if is_oversold or (drop_size > required_drop_size * 0.7):  # Si proche d'un signal
+            safe_log(f"\n{'='*70}")
+            safe_log(f"🔍 DIAGNOSTIC STRATÉGIE V-SHAPE REVERSAL")
+            safe_log(f"{'='*70}")
+            
+            # Condition 1: RSI
+            rsi_status = "✅ VALIDÉE" if is_oversold else "❌ NON REMPLIE"
+            safe_log(f"📊 CONDITION 1 - RSI Survente Extrême: {rsi_status}")
+            safe_log(f"   RSI actuel: {current_rsi:.1f}")
+            safe_log(f"   Seuil requis: < {VSHAPE_RSI_OVERSOLD}")
+            if is_oversold:
+                safe_log(f"   ✅ Marché en panique/survente extrême!")
+            else:
+                deficit_rsi = current_rsi - VSHAPE_RSI_OVERSOLD
+                safe_log(f"   ❌ RSI trop élevé de {deficit_rsi:.1f} points")
+            
+            # Condition 2: Chute significative
+            drop_status = "✅ VALIDÉE" if is_significant_drop else "❌ NON REMPLIE"
+            drop_pct = (drop_size / required_drop_size) * 100
+            safe_log(f"\n� CONDITION 2 - Chute Rapide et Violente: {drop_status}")
+            safe_log(f"   Chute mesurée: {drop_size:.2f} points sur {VSHAPE_DROP_CANDLES} bougies")
+            safe_log(f"   Seuil requis: {required_drop_size:.2f} points ({VSHAPE_DROP_ATR_MULTIPLIER}x ATR)")
+            safe_log(f"   ATR actuel: {current_atr:.3f}")
+            safe_log(f"   Ratio: {drop_pct:.1f}% du seuil")
+            if is_significant_drop:
+                safe_log(f"   ✅ Chute violente détectée! (>100%)")
+            else:
+                deficit_drop = required_drop_size - drop_size
+                safe_log(f"   ❌ Chute insuffisante de {deficit_drop:.2f} points")
+            safe_log(f"   📍 Plus haut récent: {start_price_of_drop:.2f}")
+            safe_log(f"   📍 Plus bas récent: {lowest_price_of_drop:.2f}")
+            
+            # Condition 3: Bougie de retournement
+            reversal_status = "✅ VALIDÉE" if is_reversal_candle else "❌ NON REMPLIE"
+            safe_log(f"\n📈 CONDITION 3 - Bougie de Retournement: {reversal_status}")
+            safe_log(f"   Dernière bougie: {candle_color}")
+            safe_log(f"   Open: {last_candle['open']:.2f} | Close: {last_candle['close']:.2f}")
+            candle_body = abs(last_candle['close'] - last_candle['open'])
+            safe_log(f"   Corps de bougie: {candle_body:.2f} points")
+            if is_reversal_candle:
+                safe_log(f"   ✅ Rebond haussier confirmé!")
+            else:
+                safe_log(f"   ❌ Attente d'une bougie verte pour confirmer le rebond")
+            
+            # Résumé final
+            conditions_ok = sum([is_oversold, is_significant_drop, is_reversal_candle])
+            conditions_total = 3
+            safe_log(f"\n🎯 RÉSUMÉ: {conditions_ok}/{conditions_total} conditions validées")
+            
+            if conditions_ok == 3:
+                safe_log(f"{'='*70}")
+                safe_log(f"🔥 SIGNAL V-SHAPE REVERSAL COMPLET!")
+                safe_log(f"   💰 Prix d'entrée: {current_price:.2f}")
+                safe_log(f"   🎲 Confiance: 85% (signal forte probabilité)")
+                safe_log(f"{'='*70}\n")
+            else:
+                safe_log(f"   ⏳ Manque {conditions_total - conditions_ok} condition(s)")
+                if not is_oversold:
+                    safe_log(f"   → Attente RSI < {VSHAPE_RSI_OVERSOLD}")
+                if not is_significant_drop:
+                    safe_log(f"   → Attente chute > {required_drop_size:.2f} points")
+                if not is_reversal_candle:
+                    safe_log(f"   → Attente bougie verte de confirmation")
+                safe_log(f"{'='*70}\n")
+
+        # Vérifications finales pour le signal
+        if not is_oversold:
+            return None  # Si le RSI n'est pas en survente extrême, on arrête
+
+        if not is_significant_drop:
+            return None  # La chute n'est pas assez violente
+
+        if not is_reversal_candle:
+            return None
+
+        # --- ✅ TOUTES LES CONDITIONS SONT RÉUNIES ---
+        return {
+            'type': 'BUY',
+            'reason': 'VSHAPE_REVERSAL',
+            'strength': 85,  # On assigne une force par défaut élevée car c'est un signal fort
+            'rsi': current_rsi,
+            'pullback_quality': 0,  # Non applicable ici
+            'atr': current_atr,
+            'confidence': 0.85,
+            'price': current_price
+        }
+    
     def execute_m5_trade(self, signal):
         """🎯 NOUVELLE EXÉCUTION M5 : TP/SL adaptatifs basés sur l'ATR avec validation ultra-stricte"""
         
@@ -3354,7 +3560,7 @@ class M5PullbackBot:
         
         # 🔥 NOUVELLE STRATÉGIE : TP ADAPTATIFS basés sur le SL structurel
         
-        # 🎯 TP PLAFONNÉ À 100 POINTS MAXIMUM
+        # 🎯 TP PLAFONNÉ À 250 POINTS MAXIMUM
         tp_distance = self.calculate_market_aware_tp_ratio(trend_strength, atr_value, sl_distance)
         
         # Application selon le type d'ordre
@@ -3419,6 +3625,14 @@ class M5PullbackBot:
         # 🕐 VÉRIFICATION HORAIRES DE TRADING (22h50 fermeture, 00h20 reprise)
         if not self.check_trading_hours():
             return  # Trading en pause nocturne
+        
+        # +++ INTÉGRATION DE LA NOUVELLE SÉCURITÉ (AU TOUT DÉBUT) +++
+        if self.check_daily_profit_target():
+            # Si la fonction renvoie True, cela signifie que l'objectif est atteint.
+            # On arrête immédiatement le cycle avant même de récupérer les données du marché.
+            # La gestion des trades ouverts (trailing, etc.) se fait dans une autre boucle.
+            return
+        # +++ FIN DE L'INTÉGRATION +++
         
         # 🛡️ FILET DE SÉCURITÉ - Vérification perte de balance (-5%)
         self.check_balance_safety()
@@ -3523,12 +3737,12 @@ class M5PullbackBot:
                 safe_log(f"   ❌ RSI: {current_rsi:.1f} > {rsi_overbought} | Surachat → Attendre correction")
             
             # Condition 4 : ATR (Volatilité)
-            if 1.5 <= current_atr <= 7.0:
-                safe_log(f"   ✅ ATR: {current_atr:.3f} (plage optimale: 1.5-7.0)")
-            elif current_atr < 1.5:
-                safe_log(f"   ❌ ATR: {current_atr:.3f} < 1.5 | Marché trop calme")
+            if OPTIMAL_ATR_MIN <= current_atr <= OPTIMAL_ATR_MAX:
+                safe_log(f"   ✅ ATR: {current_atr:.3f} (plage optimale: {OPTIMAL_ATR_MIN}-{OPTIMAL_ATR_MAX})")
+            elif current_atr < OPTIMAL_ATR_MIN:
+                safe_log(f"   ❌ ATR: {current_atr:.3f} < {OPTIMAL_ATR_MIN} | Marché trop calme")
             else:
-                safe_log(f"   ❌ ATR: {current_atr:.3f} > 7.0 | Marché trop volatil")
+                safe_log(f"   ❌ ATR: {current_atr:.3f} > {OPTIMAL_ATR_MAX} | Marché CHAOS → Pas de trading")
             
             # Condition 5 : Prix > EMA200 (tendance de fond)
             if current_price > ema_master:
@@ -3559,7 +3773,7 @@ class M5PullbackBot:
             if strength >= 80: conditions_ok += 1
             if pullback_quality >= 60: conditions_ok += 1
             if current_rsi <= rsi_overbought: conditions_ok += 1
-            if 1.5 <= current_atr <= 7.0: conditions_ok += 1
+            if OPTIMAL_ATR_MIN <= current_atr <= OPTIMAL_ATR_MAX: conditions_ok += 1
             if current_price > ema_master: conditions_ok += 1
             if not ENABLE_H1_CONFIRMATION or h1_trend == "BULLISH": conditions_ok += 1
             if self.buy_positions_count < max_positions: conditions_ok += 1
@@ -3583,17 +3797,30 @@ class M5PullbackBot:
                 safe_log(f"      📏 Distance prix/EMA50: {distance_to_ema50:.4f} | Seuil max: {pullback_threshold:.4f} (3.0×ATR)")
             if current_rsi < 30 or current_rsi > 70:
                 safe_log(f"   ⚡ RSI en zone: {current_rsi:.1f} (30-70 = neutre)")
-            if current_atr < 1.5 or current_atr > 7.0:
-                safe_log(f"   ⚠️ ATR hors zone optimale: {current_atr:.3f} (1.5-7.0 optimal)")
+            if current_atr < OPTIMAL_ATR_MIN or current_atr > OPTIMAL_ATR_MAX:
+                safe_log(f"   ⚠️ ATR hors zone optimale: {current_atr:.3f} ({OPTIMAL_ATR_MIN}-{OPTIMAL_ATR_MAX} optimal)")
         
         # Vérification signal PULLBACK (seulement si pas en mode sécurité)
         if not self.stats['balance_safety_active']:
-            signal = self.should_open_position(trend, strength, indicators)
+            # --- STRATÉGIES MULTIPLES: Pullback + V-Shape ---
+            signal = None  # On initialise le signal à None
+            
+            # 1. On cherche d'abord un signal de pullback (stratégie principale)
+            pullback_signal = self.should_open_position(trend, strength, indicators)
+            if pullback_signal:
+                signal = pullback_signal
+            
+            # 2. Si pas de pullback, on cherche un signal V-Shape (stratégie secondaire)
+            elif ENABLE_VSHAPE_STRATEGY:
+                vshape_signal = self.detect_v_shape_reversal_signal(df, indicators)
+                if vshape_signal:
+                    signal = vshape_signal
+                    safe_log(f"🎯 STRATÉGIE V-SHAPE activée (pullback non disponible)")
             
             if signal:
                 signal_type = signal['type']
                 reason = signal['reason']
-                safe_log(f"🔥 SIGNAL M5 {signal_type}: {reason} - Force:{strength:.1f}% Pullback:{pullback_quality:.0f}%")
+                safe_log(f"🔥 SIGNAL M5 {signal_type}: {reason} - Force:{signal.get('strength', strength):.1f}%")
                 
                 # 🎯 EXÉCUTION DU TRADE
                 success = self.execute_m5_trade(signal)
@@ -3618,10 +3845,10 @@ class M5PullbackBot:
                         safe_log(f"   📊 RSI {current_rsi:.1f} en survente (attente rebond)")
                     elif current_rsi >= 70:
                         safe_log(f"   📊 RSI {current_rsi:.1f} en surachat (attente correction)")
-                    if current_atr < 1.5:
-                        safe_log(f"   ⚡ ATR {current_atr:.3f} trop faible (marché peu volatil)")
-                    elif current_atr > 7.0:
-                        safe_log(f"   ⚡ ATR {current_atr:.3f} trop élevé (marché trop volatil)")
+                    if current_atr < OPTIMAL_ATR_MIN:
+                        safe_log(f"   ⚡ ATR {current_atr:.3f} < {OPTIMAL_ATR_MIN} (marché trop calme)")
+                    elif current_atr > OPTIMAL_ATR_MAX:
+                        safe_log(f"   ⚡ ATR {current_atr:.3f} > {OPTIMAL_ATR_MAX} (marché CHAOS → Pas de trading)")
                     if trend == "NEUTRAL":
                         safe_log(f"   🎭 Tendance neutre (pas de direction claire)")
                     safe_log(f"   ⏳ Prochaine analyse dans 30 secondes...")
@@ -3771,10 +3998,21 @@ class M5PullbackBot:
                 
                 # 📊 ANALYSE DU MARCHÉ - Toutes les 10 secondes seulement
                 if last_market_analysis >= ANALYSIS_INTERVAL:
-                    # Affichage progression toutes les 100 analyses de marché
-                    if (cycle_count // ANALYSIS_INTERVAL) % 100 == 1:
-                        elapsed = datetime.now() - self.stats['start_time']
-                        safe_log(f"\n🔥 ANALYSE MARCHÉ {cycle_count // ANALYSIS_INTERVAL} - Temps: {elapsed}")
+                    # Affichage progression à chaque analyse de marché
+                    elapsed = datetime.now() - self.stats['start_time']
+                    
+                    # 💰 Calcul et affichage de l'objectif de profit quotidien
+                    daily_profit = self.calculate_real_time_daily_profit()
+                    daily_target = self.daily_start_equity * (DAILY_PROFIT_TARGET_PERCENT / 100)
+                    progress_percent = (daily_profit / daily_target * 100) if daily_target > 0 else 0
+                    
+                    safe_log(f"\n🔥 ANALYSE #{cycle_count // ANALYSIS_INTERVAL} - Temps: {elapsed}")
+                    safe_log(f"💰 OBJECTIF QUOTIDIEN: {daily_profit:+.2f}€ / {daily_target:.2f}€ ({progress_percent:.1f}%)")
+                    
+                    if self.daily_profit_locked:
+                        safe_log(f"🔒 TRADING VERROUILLÉ - Objectif {DAILY_PROFIT_TARGET_PERCENT}% atteint!")
+                    elif progress_percent >= 50:
+                        safe_log(f"🎯 Plus que {daily_target - daily_profit:.2f}€ pour verrouiller!")
                     
                     self.run_ultra_scalping_cycle()
                     last_market_analysis = 0  # Reset compteur
@@ -3818,6 +4056,26 @@ class M5PullbackBot:
         safe_log(f"   Vitesse: {trades_per_minute:.1f} trades/minute")
         safe_log(f"   Positions max simultanées: {self.stats['max_concurrent_positions']}")
         
+        # 💰 Objectif quotidien
+        daily_profit = self.calculate_real_time_daily_profit()
+        daily_target = self.daily_start_equity * (DAILY_PROFIT_TARGET_PERCENT / 100)
+        progress_percent = (daily_profit / daily_target * 100) if daily_target > 0 else 0
+        
+        safe_log(f"\n💰 OBJECTIF QUOTIDIEN:")
+        safe_log(f"   Equity début: {self.daily_start_equity:.2f}€")
+        safe_log(f"   Profit actuel: {daily_profit:+.2f}€")
+        safe_log(f"   Objectif: {daily_target:.2f}€ ({DAILY_PROFIT_TARGET_PERCENT}%)")
+        safe_log(f"   Progression: {progress_percent:.1f}%")
+        
+        if self.daily_profit_locked:
+            safe_log(f"   🔒 STATUT: VERROUILLÉ - Objectif atteint!")
+        elif progress_percent >= 80:
+            safe_log(f"   🎯 STATUT: Presque là! Plus que {daily_target - daily_profit:.2f}€")
+        elif progress_percent >= 50:
+            safe_log(f"   📈 STATUT: Bonne progression! ({progress_percent:.1f}%)")
+        else:
+            safe_log(f"   📊 STATUT: En cours ({progress_percent:.1f}%)")
+        
         # Évaluation performance
         safe_log(f"\n🏆 ÉVALUATION:")
         if win_rate > 60 and self.stats['total_pips'] > 0:
@@ -3833,7 +4091,19 @@ class M5PullbackBot:
        
     def shutdown(self):
         """Arrêt propre du bot ultra scalping"""
+        global LOG_FILE_HANDLE
+        
         self.is_trading = False
+        
+        # Fermeture du fichier de log
+        if LOG_FILE_HANDLE:
+            try:
+                safe_log("📁 Fermeture du fichier de log quotidien")
+                LOG_FILE_HANDLE.close()
+                LOG_FILE_HANDLE = None
+            except Exception as e:
+                print(f"Erreur fermeture log: {e}")
+        
         mt5.shutdown()
         safe_log("👋 Ultra Scalping Bot arrêté proprement")
 
@@ -3847,6 +4117,16 @@ def main():
     safe_log("   🟢 BUY: Tendance hausse + repli vers EMA 50")
     safe_log("⚖️ TP/SL adaptatifs basés sur la volatilité (ATR)")
     safe_log("🛡️ FILET SÉCURITÉ: Balance -5% → Pause 1h")
+    safe_log(f"📁 LOGS SAUVEGARDÉS: {get_log_file()}")
+    safe_log("")
+    safe_log("🔥 PROTECTION ANTI-CHAOS ACTIVÉE:")
+    safe_log(f"   ⚠️ ATR MAX: {OPTIMAL_ATR_MAX} (pas de trading au-delà)")
+    safe_log(f"   ✅ ATR MIN: {OPTIMAL_ATR_MIN} (marché trop calme)")
+    safe_log(f"   🎯 Régimes de volatilité:")
+    safe_log(f"      • CALME: ATR < 2.5 (SL serré)")
+    safe_log(f"      • NORMAL: ATR 2.5-5.0 (SL standard)")
+    safe_log(f"      • CHAOS: ATR > 5.0 → ❌ AUCUN TRADE")
+    safe_log("="*60)
     
     if ENABLE_REAL_TRADING:
         safe_log("⚠️ ATTENTION: TRADING RÉEL ACTIVÉ!")
