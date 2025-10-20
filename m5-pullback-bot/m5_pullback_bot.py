@@ -162,9 +162,11 @@ SIGNAL_PERSISTENCE_CHECKS = 3         # Signal doit persister 3 vérifications
 # CONFIGURATION STRATÉGIE #2 : V-SHAPE REVERSAL (Achat sur Mèche)
 # =============================================================================
 ENABLE_VSHAPE_STRATEGY = True      # ✅ Active la stratégie secondaire d'achat sur les mèches basses
-VSHAPE_RSI_OVERSOLD = 25           # Seuil RSI de survente extrême pour déclencher
+VSHAPE_RSI_OVERSOLD = 35           # Seuil RSI de survente pour déclencher (assoupli de 25 à 35)
+VSHAPE_RSI_OVERSOLD_RELAXED = 40   # 🎯 Seuil RSI assoupli pour chutes TRÈS violentes (>150% du seuil)
 VSHAPE_DROP_CANDLES = 4            # Nombre de bougies pour mesurer la chute
 VSHAPE_DROP_ATR_MULTIPLIER = 2.0   # La chute doit être d'au moins 2.0x l'ATR
+VSHAPE_EXTREME_DROP_THRESHOLD = 150  # 🔥 Si chute >150% du seuil, accepte RSI jusqu'à 40
 
 # =============================================================================
 # 🛡️ SÉCURITÉ #2 : OBJECTIF DE PROFIT QUOTIDIEN (NOUVEAU)
@@ -3411,18 +3413,29 @@ class M5PullbackBot:
         current_rsi = indicators['rsi']
         current_atr = indicators['atr']
 
-        # --- CONDITION 1: Survente Extrême ---
-        is_oversold = current_rsi < VSHAPE_RSI_OVERSOLD
-        
-        # --- CONDITION 2: Chute Rapide et Significative ---
+        # --- CONDITION 2: Chute Rapide et Significative (calculée en premier) ---
         # On regarde le prix le plus haut des X dernières bougies avant la dernière
         start_price_of_drop = max(d['high'] for d in data[-VSHAPE_DROP_CANDLES-1:-1])
         lowest_price_of_drop = min(d['low'] for d in data[-VSHAPE_DROP_CANDLES-1:])
 
         drop_size = start_price_of_drop - lowest_price_of_drop
         required_drop_size = VSHAPE_DROP_ATR_MULTIPLIER * current_atr
+        drop_ratio = (drop_size / required_drop_size) * 100  # Pourcentage du seuil
 
         is_significant_drop = drop_size > required_drop_size
+        
+        # --- CONDITION 1: Survente Extrême (avec logique adaptative) ---
+        # 🎯 LOGIQUE ADAPTATIVE: Si chute TRÈS violente (>150%), accepter RSI jusqu'à 40
+        if drop_ratio >= VSHAPE_EXTREME_DROP_THRESHOLD:
+            # Chute extrême: seuil RSI assoupli à 40
+            rsi_threshold = VSHAPE_RSI_OVERSOLD_RELAXED
+            is_oversold = current_rsi < rsi_threshold
+            rsi_mode = "ASSOUPLI (chute extrême)"
+        else:
+            # Chute normale: seuil RSI strict à 25
+            rsi_threshold = VSHAPE_RSI_OVERSOLD
+            is_oversold = current_rsi < rsi_threshold
+            rsi_mode = "STRICT"
         
         # --- CONDITION 3: Signe de Reversal ---
         # La dernière bougie doit être haussière pour confirmer le début du rebond
@@ -3436,27 +3449,31 @@ class M5PullbackBot:
             safe_log(f"🔍 DIAGNOSTIC STRATÉGIE V-SHAPE REVERSAL")
             safe_log(f"{'='*70}")
             
-            # Condition 1: RSI
+            # Condition 1: RSI (avec seuil adaptatif)
             rsi_status = "✅ VALIDÉE" if is_oversold else "❌ NON REMPLIE"
-            safe_log(f"📊 CONDITION 1 - RSI Survente Extrême: {rsi_status}")
+            safe_log(f"📊 CONDITION 1 - RSI Survente: {rsi_status}")
             safe_log(f"   RSI actuel: {current_rsi:.1f}")
-            safe_log(f"   Seuil requis: < {VSHAPE_RSI_OVERSOLD}")
+            safe_log(f"   Seuil requis: < {rsi_threshold} (mode {rsi_mode})")
+            if drop_ratio >= VSHAPE_EXTREME_DROP_THRESHOLD:
+                safe_log(f"   🔥 Chute TRÈS violente ({drop_ratio:.1f}% du seuil) → Seuil RSI assoupli à 40")
             if is_oversold:
-                safe_log(f"   ✅ Marché en panique/survente extrême!")
+                safe_log(f"   ✅ Marché en survente détectée!")
             else:
-                deficit_rsi = current_rsi - VSHAPE_RSI_OVERSOLD
+                deficit_rsi = current_rsi - rsi_threshold
                 safe_log(f"   ❌ RSI trop élevé de {deficit_rsi:.1f} points")
             
             # Condition 2: Chute significative
             drop_status = "✅ VALIDÉE" if is_significant_drop else "❌ NON REMPLIE"
-            drop_pct = (drop_size / required_drop_size) * 100
             safe_log(f"\n� CONDITION 2 - Chute Rapide et Violente: {drop_status}")
             safe_log(f"   Chute mesurée: {drop_size:.2f} points sur {VSHAPE_DROP_CANDLES} bougies")
             safe_log(f"   Seuil requis: {required_drop_size:.2f} points ({VSHAPE_DROP_ATR_MULTIPLIER}x ATR)")
             safe_log(f"   ATR actuel: {current_atr:.3f}")
-            safe_log(f"   Ratio: {drop_pct:.1f}% du seuil")
+            safe_log(f"   Ratio: {drop_ratio:.1f}% du seuil")
             if is_significant_drop:
-                safe_log(f"   ✅ Chute violente détectée! (>100%)")
+                if drop_ratio >= VSHAPE_EXTREME_DROP_THRESHOLD:
+                    safe_log(f"   🔥 Chute TRÈS violente détectée! (>{VSHAPE_EXTREME_DROP_THRESHOLD}%)")
+                else:
+                    safe_log(f"   ✅ Chute violente détectée! (>100%)")
             else:
                 deficit_drop = required_drop_size - drop_size
                 safe_log(f"   ❌ Chute insuffisante de {deficit_drop:.2f} points")
@@ -3489,7 +3506,7 @@ class M5PullbackBot:
             else:
                 safe_log(f"   ⏳ Manque {conditions_total - conditions_ok} condition(s)")
                 if not is_oversold:
-                    safe_log(f"   → Attente RSI < {VSHAPE_RSI_OVERSOLD}")
+                    safe_log(f"   → Attente RSI < {rsi_threshold}")
                 if not is_significant_drop:
                     safe_log(f"   → Attente chute > {required_drop_size:.2f} points")
                 if not is_reversal_candle:
