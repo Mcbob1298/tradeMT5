@@ -140,7 +140,7 @@ RSI_BUY_MAX = 60               # RSI maximum pour BUY (pas de surachat excessif)
 # 🛡️ FILTRES DE CONFIRMATION PROFESSIONNELS (NOUVEAU)
 ENABLE_H1_CONFIRMATION = True      # Confirmation tendance H1 obligatoire
 OPTIMAL_ATR_MIN = 1.5              # Volatilité minimale pour trader (1.5 = 15 pips)
-OPTIMAL_ATR_MAX = 5.5              # ⚠️ Volatilité maximale (au-delà = CHAOS, pas de trading)
+OPTIMAL_ATR_MAX = 6.0              # ⚠️ Volatilité maximale (au-delà = CHAOS, pas de trading)
 
 # 🛡️ GESTION DU MODE DÉGRADÉ (NOUVEAU)
 DEGRADED_MODE_RISK_MULTIPLIER = 0.2  # Risque = 20% du risque normal (2.5% -> 0.5%)
@@ -1426,19 +1426,43 @@ class M5PullbackBot:
                 # 🚀 TRAILING STOP PROGRESSIF - Activation à 40% pour laisser respirer
                 if tp_progress_pct >= 40.0:  # Activation dès 40% (au lieu de 20%)
                     
-                    # 📈 CALCUL DU NIVEAU DE SL PROGRESSIF - TOUJOURS POSITIF
-                    if tp_progress_pct >= 80.0:
-                        # Quasi TP atteint → 65% du profit sécurisé
+                    # � CALCUL DU PROFIT ACTUEL PAR RAPPORT À L'OBJECTIF QUOTIDIEN
+                    # D'abord récupérer le profit actuel de la position MT5
+                    current_profit = mt5_position.profit if mt5_position else 0
+                    current_profit_usd = current_profit if current_profit > 0 else 0
+                    daily_target = self.daily_start_equity * (DAILY_PROFIT_TARGET_PERCENT / 100) if self.daily_start_equity > 0 else 142.53
+                    current_profit_percent_of_goal = (current_profit_usd / daily_target) * 100 if daily_target > 0 else 0
+                    
+                    # 🎯 TRAILING STOP DYNAMIQUE BASÉ SUR LE PROFIT RÉEL
+                    # Plus on approche de l'objectif quotidien, plus on serre le SL
+                    if current_profit_percent_of_goal > 70:
+                        # 🔥 Plus de 70% de l'objectif quotidien → Très serré (70% du profit)
+                        sl_profit_ratio = 0.70
+                        phase = "🔥 SÉCURISATION MAX (70% profit)"
+                        log_level = "🔥"
+                    elif current_profit_percent_of_goal > 40:
+                        # 📈 Plus de 40% de l'objectif → Serré (50% du profit)
+                        sl_profit_ratio = 0.50
+                        phase = "📈 SÉCURISATION ACTIVE (50% profit)"
+                        log_level = "📈"
+                    elif tp_progress_pct >= 80.0:
+                        # Quasi TP atteint mais profit global modéré → 65% du profit
                         sl_profit_ratio = 0.65
-                        phase = "QUASI-TP (65% profit)"
+                        phase = "⚙️ QUASI-TP (65% profit)"
+                        log_level = "⚙️"
                     elif tp_progress_pct >= 60.0:
                         # Bon momentum → 45% du profit sécurisé
                         sl_profit_ratio = 0.45
-                        phase = "MOMENTUM (45% profit)"
-                    else:  # Concerne la plage 40-60%
-                        # Progression solide → 30% du profit sécurisé
+                        phase = "⚙️ MOMENTUM (45% profit)"
+                        log_level = "⚙️"
+                    else:  # Concerne la plage 40-60% TP et profit global < 40%
+                        # Progression standard → 30% du profit sécurisé
                         sl_profit_ratio = 0.30
-                        phase = "PROGRESSION (30% profit)"
+                        phase = "⚙️ PROGRESSION (30% profit)"
+                        log_level = "⚙️"
+                    
+                    # Log du ratio dynamique appliqué
+                    safe_log(f"{log_level} Ratio Trailing Stop ajusté à {sl_profit_ratio*100:.0f}% (Profit actuel: {current_profit_percent_of_goal:.1f}% de l'objectif)")
 
                     # Calcul du nouveau SL selon la phase
                     target_profit_distance = tp_distance * sl_profit_ratio
@@ -3422,7 +3446,13 @@ class M5PullbackBot:
         required_drop_size = VSHAPE_DROP_ATR_MULTIPLIER * current_atr
         drop_ratio = (drop_size / required_drop_size) * 100  # Pourcentage du seuil
 
-        is_significant_drop = drop_size > required_drop_size
+        # 🔍 VALIDATION CRITIQUE: Le prix doit être PROCHE DU BAS, pas déjà remonté
+        # Si le prix a remonté de plus de 30% depuis le plus bas, ce n'est plus un signal V-SHAPE valide
+        price_recovery_from_bottom = current_price - lowest_price_of_drop
+        recovery_percent = (price_recovery_from_bottom / drop_size * 100) if drop_size > 0 else 100
+        price_near_bottom = recovery_percent <= 30  # Le prix ne doit pas avoir remonté de plus de 30%
+
+        is_significant_drop = drop_size > required_drop_size and price_near_bottom
         
         # --- CONDITION 1: Survente Extrême (avec logique adaptative) ---
         # 🎯 LOGIQUE ADAPTATIVE: Si chute TRÈS violente (>150%), accepter RSI jusqu'à 40
@@ -3479,6 +3509,13 @@ class M5PullbackBot:
                 safe_log(f"   ❌ Chute insuffisante de {deficit_drop:.2f} points")
             safe_log(f"   📍 Plus haut récent: {start_price_of_drop:.2f}")
             safe_log(f"   📍 Plus bas récent: {lowest_price_of_drop:.2f}")
+            safe_log(f"   📍 Prix actuel: {current_price:.2f}")
+            safe_log(f"   📊 Remontée depuis le bas: {price_recovery_from_bottom:.2f} points ({recovery_percent:.1f}%)")
+            
+            # Ajout de détails sur la validation
+            if drop_size > required_drop_size and not price_near_bottom:
+                safe_log(f"   ❌ Prix a déjà remonté de {recovery_percent:.1f}% (>30% max autorisé)")
+                safe_log(f"   💡 Signal V-SHAPE invalide: le prix n'est plus au bas de la chute")
             
             # Condition 3: Bougie de retournement
             reversal_status = "✅ VALIDÉE" if is_reversal_candle else "❌ NON REMPLIE"
