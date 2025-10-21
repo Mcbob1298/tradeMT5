@@ -139,8 +139,10 @@ RSI_BUY_MAX = 60               # RSI maximum pour BUY (pas de surachat excessif)
 
 # 🛡️ FILTRES DE CONFIRMATION PROFESSIONNELS (NOUVEAU)
 ENABLE_H1_CONFIRMATION = True      # Confirmation tendance H1 obligatoire
+H1_MIN_TREND_FORCE = 0.5           # 🛡️ Force minimale de la tendance H1 (0.5% = marché stable)
+                                    # Si force H1 < 0.5%, le marché est en retournement → pas de trade
 OPTIMAL_ATR_MIN = 1.5              # Volatilité minimale pour trader (1.5 = 15 pips)
-OPTIMAL_ATR_MAX = 6.0              # ⚠️ Volatilité maximale (au-delà = CHAOS, pas de trading)
+OPTIMAL_ATR_MAX = 5.4              # ⚠️ Volatilité maximale abaissée à 5.4 (au-delà = CHAOS, pas de trading)
 
 # 🛡️ GESTION DU MODE DÉGRADÉ (NOUVEAU)
 DEGRADED_MODE_RISK_MULTIPLIER = 0.2  # Risque = 20% du risque normal (2.5% -> 0.5%)
@@ -167,6 +169,8 @@ VSHAPE_RSI_OVERSOLD_RELAXED = 40   # 🎯 Seuil RSI assoupli pour chutes TRÈS v
 VSHAPE_DROP_CANDLES = 4            # Nombre de bougies pour mesurer la chute
 VSHAPE_DROP_ATR_MULTIPLIER = 2.0   # La chute doit être d'au moins 2.0x l'ATR
 VSHAPE_EXTREME_DROP_THRESHOLD = 150  # 🔥 Si chute >150% du seuil, accepte RSI jusqu'à 40
+VSHAPE_MIN_CANDLE_BODY = 2.0       # 🛡️ Corps de bougie minimum requis (en points) pour valider le rebond
+                                    # Évite les faux signaux sur micro-variations (+0.46pts)
 
 # =============================================================================
 # 🛡️ SÉCURITÉ #2 : OBJECTIF DE PROFIT QUOTIDIEN (NOUVEAU)
@@ -572,13 +576,15 @@ class M5PullbackBot:
         NOUVELLE STRATÉGIE VOLATILITÉ :
         - Marché TRÈS VOLATIL (ATR > 6.0) : TP 150 points (15 pips) - 50% bonus
         - Marché NORMAL : TP 250 points (25 pips) 
+        - 🔧 NOUVEAU: Si Force >90%, TP minimum = SL (ratio 1:1) pour éviter ratio catastrophique
         - SL plus grand (2.5x ATR) pour respiration
         - Lots adaptés selon volatilité
         
         Logic:
         1. Détecte la volatilité extrême (ATR > 6.0)
         2. Adapte le TP selon volatilité et tendance
-        3. Optimise pour profiter des grands mouvements
+        3. 🛡️ Garantit ratio minimum 1:1 pour force >90%
+        4. Optimise pour profiter des grands mouvements
         
         Args:
             trend_strength (float): Force de la tendance (0-100%)
@@ -628,6 +634,15 @@ class M5PullbackBot:
             
             # 🎯 APPLICATION DU PLAFOND ADAPTATIF
             final_tp_distance = min(theoretical_tp, max_tp_distance)
+            
+            # 🛡️ NOUVELLE PROTECTION: Si Force >90%, garantir ratio minimum 1:1
+            if trend_strength >= 90:
+                min_tp_distance = sl_distance  # TP minimum = SL (ratio 1:1)
+                if final_tp_distance < min_tp_distance:
+                    safe_log(f"🛡️ PROTECTION RATIO R/R ACTIVÉE:")
+                    safe_log(f"   ⚡ Force {trend_strength:.1f}% > 90% → Ratio minimum 1:1 garanti")
+                    safe_log(f"   📊 TP original: {final_tp_distance/0.01:.0f} pts → TP ajusté: {min_tp_distance/0.01:.0f} pts")
+                    final_tp_distance = min_tp_distance
             
             # 🛡️ PLAFONNEMENT DU TP EN MODE DÉGRADÉ
             if self.stats.get('balance_safety_active', False):
@@ -1993,7 +2008,7 @@ class M5PullbackBot:
             rates_h1 = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_H1, 0, 50)
             if rates_h1 is None or len(rates_h1) < 50:
                 safe_log("⚠️ Données H1 insuffisantes pour confirmation")
-                return "NEUTRAL"  # En cas de doute, on s'abstient
+                return "NEUTRAL", 0.0  # En cas de doute, on s'abstient
 
             close_h1 = [rate['close'] for rate in rates_h1]
             ema50_h1 = self.calculate_ema(close_h1, 50)
@@ -2005,16 +2020,19 @@ class M5PullbackBot:
             price_difference = current_price - current_ema50_h1  # Différence brute en prix
             price_distance_h1 = abs(price_difference) / current_price * 100  # Pourcentage
             
+            # 🔧 NOUVEAU: Calculer la force de la tendance H1
+            h1_force = price_distance_h1  # Force = distance à l'EMA50 en %
+            
             if current_price > current_ema50_h1:
-                safe_log(f"📈 CONFIRMATION H1: Tendance HAUSSIÈRE (Prix > EMA50 H1, écart: +{price_distance_h1:.2f}% / +${price_difference:.2f})")
-                return "BULLISH"
+                safe_log(f"📈 CONFIRMATION H1: Tendance HAUSSIÈRE (Prix > EMA50 H1, écart: +{price_distance_h1:.2f}% / +${price_difference:.2f}, Force: {h1_force:.1f}%)")
+                return "BULLISH", h1_force
             else:
-                safe_log(f"📉 CONFIRMATION H1: Tendance BAISSIÈRE (Prix < EMA50 H1, écart: -{price_distance_h1:.2f}% / ${price_difference:.2f})")
-                return "BEARISH"
+                safe_log(f"📉 CONFIRMATION H1: Tendance BAISSIÈRE (Prix < EMA50 H1, écart: -{price_distance_h1:.2f}% / ${price_difference:.2f}, Force: {h1_force:.1f}%)")
+                return "BEARISH", h1_force
 
         except Exception as e:
             safe_log(f"❌ Erreur confirmation H1: {e}")
-            return "NEUTRAL"
+            return "NEUTRAL", 0.0
 
     def check_volatility_regime(self, current_atr):
         """🛡️ FILTRE PROFESSIONNEL: Vérifie si les conditions de volatilité sont optimales"""
@@ -2227,8 +2245,8 @@ class M5PullbackBot:
         # Confirmation H1
         if hasattr(self, 'get_h1_trend_confirmation'):
             try:
-                h1_trend = self.get_h1_trend_confirmation()
-                safe_log(f"   📈 Tendance H1: {h1_trend}")
+                h1_trend, h1_force = self.get_h1_trend_confirmation()
+                safe_log(f"   📈 Tendance H1: {h1_trend} (Force: {h1_force:.1f}%)")
                 if trend == "BULLISH" and h1_trend != "BULLISH":
                     safe_log(f"   ❌ CONFLIT: M5 BULLISH vs H1 {h1_trend}")
                 elif trend == "BEARISH" and h1_trend != "BEARISH":
@@ -2740,13 +2758,16 @@ class M5PullbackBot:
             
             deals = mt5.history_deals_get(from_date, to_date, position=ticket)
             if deals:
-                # Filtrer les deals de sortie (fermeture) uniquement
+                # 🔧 FIX: Sommer TOUS les deals pour obtenir le profit réel
+                # (profit/perte + swap + commission)
+                total_profit = sum(deal.profit for deal in deals)
+                
+                # Filtrer les deals de sortie (fermeture) pour récupérer le commentaire
                 exit_deals = [deal for deal in deals if deal.entry == mt5.DEAL_ENTRY_OUT]
                 
                 if exit_deals:
-                    # Prendre le dernier deal de sortie (fermeture)
+                    # Prendre le dernier deal de sortie pour avoir le commentaire
                     last_exit_deal = exit_deals[-1]
-                    total_profit = last_exit_deal.profit
                     
                     # Déterminer le type de fermeture plus précisément
                     comment = last_exit_deal.comment.lower() if last_exit_deal.comment else ""
@@ -3303,13 +3324,22 @@ class M5PullbackBot:
         
         # FILTRE 1: Confirmation tendance H1 (évite les trades contre-tendance)
         if ENABLE_H1_CONFIRMATION:
-            h1_trend = self.get_h1_trend_confirmation()
+            h1_trend, h1_force = self.get_h1_trend_confirmation()
             if h1_trend == "NEUTRAL":
                 safe_log("❌ SIGNAL REJETÉ: Confirmation H1 impossible - Pas de trading en cas de doute")
                 self.log_detailed_market_analysis(trend, strength, indicators, "H1_CONFIRMATION_IMPOSSIBLE")
                 return None
+            
+            # 🛡️ NOUVEAU: Vérifier la force de la tendance H1 pour éviter les retournements
+            if h1_force < H1_MIN_TREND_FORCE:
+                safe_log(f"🛡️ PROTECTION RETOURNEMENT H1 ACTIVÉE:")
+                safe_log(f"   ❌ Force H1: {h1_force:.2f}% < {H1_MIN_TREND_FORCE}%")
+                safe_log(f"   💡 Marché H1 trop faible ou en retournement → Signal rejeté")
+                safe_log(f"   🎯 La tendance H1 doit avoir au moins {H1_MIN_TREND_FORCE}% de force pour trader en sécurité")
+                return None
         else:
             h1_trend = trend  # Si désactivé, on accepte la tendance M5
+            h1_force = 0.0
         
         # FILTRE 2: Régime de volatilité optimal
         if not self.check_volatility_regime(current_atr):
@@ -3468,10 +3498,21 @@ class M5PullbackBot:
             rsi_mode = "STRICT"
         
         # --- CONDITION 3: Signe de Reversal ---
-        # La dernière bougie doit être haussière pour confirmer le début du rebond
+        # La dernière bougie doit être haussière ET avoir un corps significatif
         last_candle = data[-1]
-        is_reversal_candle = last_candle['close'] > last_candle['open']
-        candle_color = "🟢 VERTE" if is_reversal_candle else "🔴 ROUGE"
+        candle_body = abs(last_candle['close'] - last_candle['open'])
+        is_green_candle = last_candle['close'] > last_candle['open']
+        is_significant_body = candle_body >= VSHAPE_MIN_CANDLE_BODY
+        is_reversal_candle = is_green_candle and is_significant_body
+        
+        # Déterminer la couleur et le statut de la bougie
+        if is_green_candle:
+            if is_significant_body:
+                candle_color = "🟢 VERTE FORTE"
+            else:
+                candle_color = "🟡 VERTE MICRO"  # Micro-bougie verte (piège!)
+        else:
+            candle_color = "🔴 ROUGE"
         
         # 📊 DIAGNOSTIC DÉTAILLÉ V-SHAPE (Affiché systématiquement si au moins une condition proche)
         if is_oversold or (drop_size > required_drop_size * 0.7):  # Si proche d'un signal
@@ -3522,12 +3563,16 @@ class M5PullbackBot:
             safe_log(f"\n📈 CONDITION 3 - Bougie de Retournement: {reversal_status}")
             safe_log(f"   Dernière bougie: {candle_color}")
             safe_log(f"   Open: {last_candle['open']:.2f} | Close: {last_candle['close']:.2f}")
-            candle_body = abs(last_candle['close'] - last_candle['open'])
-            safe_log(f"   Corps de bougie: {candle_body:.2f} points")
+            safe_log(f"   Corps de bougie: {candle_body:.2f} points (min requis: {VSHAPE_MIN_CANDLE_BODY:.2f})")
+            
             if is_reversal_candle:
-                safe_log(f"   ✅ Rebond haussier confirmé!")
+                safe_log(f"   ✅ Rebond haussier FORT confirmé!")
+            elif is_green_candle and not is_significant_body:
+                safe_log(f"   🚨 PIÈGE DÉTECTÉ: Micro-bougie verte ({candle_body:.2f} pts)")
+                safe_log(f"   ❌ Corps insuffisant (< {VSHAPE_MIN_CANDLE_BODY:.2f} pts)")
+                safe_log(f"   💡 Protection activée: Signal V-SHAPE rejeté pour éviter faux signal")
             else:
-                safe_log(f"   ❌ Attente d'une bougie verte pour confirmer le rebond")
+                safe_log(f"   ❌ Attente d'une bougie verte FORTE pour confirmer le rebond")
             
             # Résumé final
             conditions_ok = sum([is_oversold, is_significant_drop, is_reversal_candle])
@@ -3549,6 +3594,14 @@ class M5PullbackBot:
                 if not is_reversal_candle:
                     safe_log(f"   → Attente bougie verte de confirmation")
                 safe_log(f"{'='*70}\n")
+
+        # 🛡️ FILTRE ATR - Protection contre la haute volatilité
+        if not self.check_volatility_regime(current_atr):
+            safe_log(f"\n🛡️ PROTECTION V-SHAPE ACTIVÉE:")
+            safe_log(f"   ❌ ATR {current_atr:.3f} > {OPTIMAL_ATR_MAX}")
+            safe_log(f"   💡 Marché trop volatile pour V-SHAPE → Signal rejeté")
+            safe_log(f"   🎯 La stratégie V-SHAPE nécessite un marché calme (ATR ≤ {OPTIMAL_ATR_MAX})")
+            return None
 
         # Vérifications finales pour le signal
         if not is_oversold:
@@ -3806,13 +3859,19 @@ class M5PullbackBot:
             
             # Condition 6 : Confirmation H1
             if ENABLE_H1_CONFIRMATION:
-                h1_trend = self.get_h1_trend_confirmation()
+                h1_trend, h1_force = self.get_h1_trend_confirmation()
                 if h1_trend == "BULLISH":
-                    safe_log(f"   ✅ Confirmation H1: BULLISH | Tendance de fond alignée")
+                    if h1_force >= H1_MIN_TREND_FORCE:
+                        safe_log(f"   ✅ Confirmation H1: BULLISH (Force: {h1_force:.1f}%) | Tendance de fond forte")
+                    else:
+                        safe_log(f"   ⚠️ Confirmation H1: BULLISH mais force faible ({h1_force:.1f}% < {H1_MIN_TREND_FORCE}%) | Risque retournement")
                 elif h1_trend == "BEARISH":
                     safe_log(f"   ❌ Confirmation H1: BEARISH | Conflit avec M5 → Pas de trade")
                 else:
                     safe_log(f"   ⚠️ Confirmation H1: NEUTRAL | Direction incertaine")
+            else:
+                h1_trend = trend
+                h1_force = 0.0
             
             # Condition 7 : Positions disponibles
             max_positions = self.calculate_adaptive_max_positions()
@@ -3829,7 +3888,7 @@ class M5PullbackBot:
             if current_rsi <= rsi_overbought: conditions_ok += 1
             if OPTIMAL_ATR_MIN <= current_atr <= OPTIMAL_ATR_MAX: conditions_ok += 1
             if current_price > ema_master: conditions_ok += 1
-            if not ENABLE_H1_CONFIRMATION or h1_trend == "BULLISH": conditions_ok += 1
+            if not ENABLE_H1_CONFIRMATION or (h1_trend == "BULLISH" and h1_force >= H1_MIN_TREND_FORCE): conditions_ok += 1
             if self.buy_positions_count < max_positions: conditions_ok += 1
             
             percentage_ready = (conditions_ok / conditions_total) * 100
